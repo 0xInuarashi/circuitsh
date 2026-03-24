@@ -364,15 +364,19 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     console.log(`  ${c.magenta}└──${c.reset}`);
   }
   console.log(`  ${c.dim}Expanding RUN prompt via ${config.promptEngineerModel}...${c.reset}`);
-  const runExpansion = await harness.expandRun(runContext);
+  if (isDebug) {
+    process.stdout.write(`\n  ${c.blue}┌─ EXPANDED PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
+  }
+  const runExpansion = await harness.expandRun(
+    runContext,
+    isDebug ? (chunk) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+  );
 
   // Update engineer scratchpad
   Object.assign(state.engineerScratchpad, runExpansion.engineerScratchpadUpdates);
 
   if (isDebug) {
-    console.log(`\n  ${c.blue}┌─ EXPANDED PROMPT ${c.dim}(${runExpansion.expandedPrompt.length} chars)${c.reset} ${c.blue}──${c.reset}`);
-    console.log(indent(runExpansion.expandedPrompt, `  ${c.blue}│${c.reset} `));
-    console.log(`  ${c.blue}└──${c.reset}`);
+    console.log(`\n  ${c.blue}└── ${c.dim}(${runExpansion.expandedPrompt.length} chars)${c.reset}`);
   } else if (isVerbose) {
     console.log(`  ${c.dim}Expanded RUN prompt (${runExpansion.expandedPrompt.length} chars)${c.reset}`);
   }
@@ -471,13 +475,17 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     console.log(`  ${c.magenta}└──${c.reset}`);
   }
   console.log(`  ${c.dim}Expanding EVAL prompt via ${config.promptEngineerModel}...${c.reset}`);
-  const evalExpansion = await harness.expandEval(evalContext);
+  if (isDebug) {
+    process.stdout.write(`\n  ${c.blue}┌─ EXPANDED EVAL PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
+  }
+  const evalExpansion = await harness.expandEval(
+    evalContext,
+    isDebug ? (chunk) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+  );
   Object.assign(state.engineerScratchpad, evalExpansion.engineerScratchpadUpdates);
 
   if (isDebug) {
-    console.log(`\n  ${c.blue}┌─ EXPANDED EVAL PROMPT ${c.dim}(${evalExpansion.expandedPrompt.length} chars)${c.reset} ${c.blue}──${c.reset}`);
-    console.log(indent(evalExpansion.expandedPrompt, `  ${c.blue}│${c.reset} `));
-    console.log(`  ${c.blue}└──${c.reset}`);
+    console.log(`\n  ${c.blue}└── ${c.dim}(${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
   } else if (isVerbose) {
     console.log(`  ${c.dim}Expanded EVAL prompt (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
   }

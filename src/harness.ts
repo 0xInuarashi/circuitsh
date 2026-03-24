@@ -93,40 +93,64 @@ export class Harness {
   /**
    * Expand a RUN prompt with full context.
    */
-  async expandRun(context: ExpansionContext): Promise<ExpansionResult> {
+  async expandRun(
+    context: ExpansionContext,
+    onChunk?: (text: string) => void,
+  ): Promise<ExpansionResult> {
     const userMessage = this.buildContextMessage(context);
     return this.expand(
       RUN_EXPANSION_SYSTEM,
       userMessage,
       TEMP_RUN_EXPANSION,
+      onChunk,
     );
   }
 
   /**
    * Expand an EVAL prompt with full context.
    */
-  async expandEval(context: ExpansionContext): Promise<ExpansionResult> {
+  async expandEval(
+    context: ExpansionContext,
+    onChunk?: (text: string) => void,
+  ): Promise<ExpansionResult> {
     const userMessage = this.buildContextMessage(context);
     return this.expand(
       EVAL_EXPANSION_SYSTEM,
       userMessage,
       TEMP_EVAL_EXPANSION,
+      onChunk,
     );
+  }
+
+  private async streamComplete(
+    model: string,
+    messages: { role: "system" | "user" | "assistant"; content: string }[],
+    temperature: number,
+    onChunk?: (text: string) => void,
+  ): Promise<string> {
+    const chunks: string[] = [];
+    for await (const chunk of this.client.stream(model, messages, temperature)) {
+      chunks.push(chunk.content);
+      if (onChunk && chunk.content) onChunk(chunk.content);
+    }
+    return chunks.join("");
   }
 
   private async expand(
     systemPrompt: string,
     userMessage: string,
     temperature: number,
+    onChunk?: (text: string) => void,
   ): Promise<ExpansionResult> {
     // First attempt
-    const response = await this.client.complete(
+    const response = await this.streamComplete(
       this.model,
       [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },
       ],
       temperature,
+      onChunk,
     );
 
     let expandedPrompt = parseExpandedPrompt(response);
@@ -140,7 +164,7 @@ export class Harness {
     }
 
     // Format retry
-    const retryResponse = await this.client.complete(
+    const retryResponse = await this.streamComplete(
       this.model,
       [
         { role: "system", content: systemPrompt },
@@ -149,6 +173,7 @@ export class Harness {
         { role: "user", content: FORMAT_REMINDER },
       ],
       TEMP_FORMAT_RETRY,
+      onChunk,
     );
 
     expandedPrompt = parseExpandedPrompt(retryResponse);

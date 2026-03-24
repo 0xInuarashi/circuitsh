@@ -1,8 +1,8 @@
 # DEFINES
 PROVIDER Openrouter
 API_KEY sk-hypercanvas-ea5ae94a72a89e837e07a226742cfb68cc67d2c327570c24
-API_URL https://claude-oauth-api-production.up.railway.app/api/v1
-PROMPT_ENGINEER_MODEL anthropic/claude-haiku-4-5
+API_URL https://claude-oauth-api-0xtayzon-production.up.railway.app/api/v1
+PROMPT_ENGINEER_MODEL anthropic/claude-sonnet-4-6
 RUN_BIN claude --dangerously-skip-permissions --effort max --model claude-sonnet-4-6
 EVAL_BIN claude --dangerously-skip-permissions --effort max --model claude-sonnet-4-6
 DIR ~/circuitinference
@@ -41,4 +41,4 @@ CIRCUIT Double inference TPS of a small language model:
     3. Both benchmarks must have generated coherent output (not garbage/empty) \
     4. The optimized benchmark must still produce valid text (optimization didn't break generation) \
     5. Print the comparison: baseline TPS, optimized TPS, speedup ratio
-    RETRY 5
+    RETRY 10

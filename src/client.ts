@@ -139,15 +139,29 @@ export class OpenRouterClient {
 
     const maxRetries429 = 3;
     const maxRetries5xx = 1;
+    const maxRetriesNetwork = 3;
     let retries429 = 0;
     let retries5xx = 0;
+    let retriesNetwork = 0;
 
     while (true) {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      });
+      let resp: Response;
+      try {
+        resp = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        retriesNetwork++;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (retriesNetwork > maxRetriesNetwork) {
+          throw new ProviderError(`Network error after ${maxRetriesNetwork} retries: ${msg}`, 0);
+        }
+        this.raw("NETWORK ERROR", `${msg} — retry ${retriesNetwork}/${maxRetriesNetwork}, sleeping ${1000 * retriesNetwork}ms`);
+        await sleep(1000 * retriesNetwork);
+        continue;
+      }
 
       this.raw("API RESPONSE STATUS", `${resp.status} ${resp.statusText}`);
 
