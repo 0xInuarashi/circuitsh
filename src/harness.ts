@@ -294,3 +294,87 @@ function compressExecutionHistory(history: IterationResult[]): string {
 
   return lines.join("\n");
 }
+
+// ── Timeout Diagnosis ──
+
+export interface TimeoutDiagnosis {
+  action: "resume" | "retry" | "increase_timeout" | "abort";
+  reason: string;
+  suggestedTimeoutMs?: number;
+}
+
+const TIMEOUT_DIAGNOSIS_SYSTEM = `\
+You are the prompt engineer inside the Circuit orchestration system. A BIN command has timed out. \
+You must analyze the partial output and decide what to do.
+
+Analyze the situation and decide one of these actions:
+- "resume": The work was progressing well but ran out of time. Resume the session to continue where it left off.
+- "retry": The approach seems wrong or stuck. Retry from scratch with a different strategy.
+- "increase_timeout": The work is correct and progressing but legitimately needs more time (e.g. compiling, downloading). Suggest a new timeout.
+- "abort": The situation is unrecoverable (e.g. infinite loop, fundamental error).
+
+Output your decision in these tags:
+<timeout_action>resume|retry|increase_timeout|abort</timeout_action>
+<timeout_reason>Brief explanation of why</timeout_reason>
+<timeout_suggested_ms>number (only if action is increase_timeout)</timeout_suggested_ms>`;
+
+export async function diagnoseTimeout(
+  client: OpenRouterClient,
+  model: string,
+  opts: {
+    binCommand: string;
+    timeoutMs: number;
+    partialStdout: string;
+    partialStderr: string;
+    role: "run" | "eval";
+    iteration: number;
+    maxRetries: number;
+    goal: string;
+    userPrompt: string;
+  },
+): Promise<TimeoutDiagnosis> {
+  const message = `\
+A ${opts.role.toUpperCase()} BIN timed out after ${opts.timeoutMs / 1000}s.
+
+GOAL: ${opts.goal}
+TASK: ${opts.userPrompt}
+BIN: ${opts.binCommand}
+ITERATION: ${opts.iteration + 1} of ${opts.maxRetries + 1}
+
+PARTIAL STDOUT (last 3000 chars):
+${opts.partialStdout.slice(-3000)}
+
+PARTIAL STDERR (last 1500 chars):
+${opts.partialStderr.slice(-1500)}
+
+What should we do?`;
+
+  try {
+    const response = await client.complete(
+      model,
+      [
+        { role: "system", content: TIMEOUT_DIAGNOSIS_SYSTEM },
+        { role: "user", content: message },
+      ],
+      0.2,
+    );
+
+    const actionMatch = response.match(/<timeout_action>(.*?)<\/timeout_action>/s);
+    const reasonMatch = response.match(/<timeout_reason>(.*?)<\/timeout_reason>/s);
+    const timeoutMatch = response.match(/<timeout_suggested_ms>(\d+)<\/timeout_suggested_ms>/s);
+
+    const action = actionMatch?.[1]?.trim() as TimeoutDiagnosis["action"] ?? "retry";
+    const reason = reasonMatch?.[1]?.trim() ?? "Could not determine reason";
+    const suggestedTimeoutMs = timeoutMatch ? parseInt(timeoutMatch[1]!, 10) : undefined;
+
+    // Validate action
+    if (!["resume", "retry", "increase_timeout", "abort"].includes(action)) {
+      return { action: "retry", reason: `Unknown action "${action}", defaulting to retry` };
+    }
+
+    return { action, reason, suggestedTimeoutMs };
+  } catch {
+    // If diagnosis itself fails, default to resume (optimistic)
+    return { action: "resume", reason: "Diagnosis failed, defaulting to resume" };
+  }
+}

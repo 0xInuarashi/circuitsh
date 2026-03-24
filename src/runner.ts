@@ -89,7 +89,13 @@ export async function runBin(opts: {
       const durationMs = Date.now() - startTime;
 
       if (timedOut) {
-        reject(new BinTimeoutError(opts.binCommand, opts.timeoutMs));
+        const rawStdout = stdoutChunks.join("");
+        reject(new BinTimeoutError(
+          opts.binCommand,
+          opts.timeoutMs,
+          opts.adapter.parseOutput(rawStdout, stderrChunks.join("")),
+          stderrChunks.join(""),
+        ));
         return;
       }
 

@@ -11,7 +11,7 @@ import type {
   StepState,
 } from "./types.ts";
 import { OpenRouterClient } from "./client.ts";
-import { Harness } from "./harness.ts";
+import { Harness, diagnoseTimeout } from "./harness.ts";
 import { detectAdapter } from "./session.ts";
 import { runBin } from "./runner.ts";
 import { parseVerdict, parseScratchpadUpdates } from "./verdict.ts";
@@ -183,8 +183,42 @@ export async function executeCircuit(
           continue;
         }
         if (err instanceof BinTimeoutError) {
-          console.log(`  ${c.yellow}BIN timed out — counting as failure${c.reset}`);
-          // Continue to next retry
+          console.log(`  ${c.yellow}BIN timed out after ${(err.timeoutMs / 1000).toFixed(0)}s${c.reset}`);
+          console.log(`  ${c.dim}Consulting prompt engineer...${c.reset}`);
+
+          const diagnosis = await diagnoseTimeout(client, config.promptEngineerModel, {
+            binCommand: config.runBin,
+            timeoutMs: err.timeoutMs,
+            partialStdout: err.partialStdout,
+            partialStderr: err.partialStderr,
+            role: "run",
+            iteration,
+            maxRetries,
+            goal: circuit.name,
+            userPrompt: step.run.prompt,
+          });
+
+          console.log(`  ${c.cyan}Engineer decision: ${c.bold}${diagnosis.action}${c.reset}`);
+          console.log(`  ${c.dim}${diagnosis.reason}${c.reset}`);
+
+          if (diagnosis.action === "abort") {
+            console.log(`  ${c.red}Aborting step per engineer recommendation${c.reset}`);
+            break;
+          }
+
+          if (diagnosis.action === "increase_timeout" && diagnosis.suggestedTimeoutMs) {
+            const newTimeout = Math.min(diagnosis.suggestedTimeoutMs, config.timeout * 1000 * 5 || 3600000);
+            config.timeout = newTimeout / 1000;
+            console.log(`  ${c.yellow}Timeout increased to ${config.timeout}s${c.reset}`);
+          }
+
+          if (diagnosis.action === "resume") {
+            // Don't count as a retry — resume continues the session
+            console.log(`  ${c.cyan}Resuming session...${c.reset}`);
+            iteration--;
+          }
+
+          // "retry" falls through to the next iteration naturally
           continue;
         }
         // Unknown error
