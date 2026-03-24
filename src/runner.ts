@@ -1,0 +1,105 @@
+import { spawn } from "child_process";
+import type { BinOutput, SessionAdapter } from "./types.ts";
+import { BinNotFoundError, BinTimeoutError } from "./errors.ts";
+
+/**
+ * Execute a BIN command via subprocess.
+ * Streams stdout/stderr in real-time via callbacks.
+ */
+export async function runBin(opts: {
+  adapter: SessionAdapter;
+  binCommand: string;
+  prompt: string;
+  sessionId: string;
+  isFirst: boolean;
+  workingDir: string;
+  timeoutMs: number;
+  onStdout?: (chunk: string) => void;
+  onStderr?: (chunk: string) => void;
+}): Promise<BinOutput> {
+  const command = opts.adapter.buildCommand(
+    opts.binCommand,
+    opts.prompt,
+    opts.sessionId,
+    opts.isFirst,
+    opts.workingDir,
+  );
+
+  const [cmd, ...args] = command;
+  if (!cmd) {
+    throw new BinNotFoundError(opts.binCommand);
+  }
+
+  const startTime = Date.now();
+
+  return new Promise<BinOutput>((resolve, reject) => {
+    let proc;
+    try {
+      proc = spawn(cmd, args, {
+        cwd: opts.workingDir,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env },
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      reject(new BinNotFoundError(`${opts.binCommand}: ${msg}`));
+      return;
+    }
+
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    let timedOut = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+    if (opts.timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        proc.kill("SIGTERM");
+        // Grace period then SIGKILL
+        setTimeout(() => {
+          try {
+            proc.kill("SIGKILL");
+          } catch {
+            // already dead
+          }
+        }, 5000);
+      }, opts.timeoutMs);
+    }
+
+    proc.stdout.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stdoutChunks.push(text);
+      opts.onStdout?.(text);
+    });
+
+    proc.stderr.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stderrChunks.push(text);
+      opts.onStderr?.(text);
+    });
+
+    proc.on("error", (err) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      reject(new BinNotFoundError(`${opts.binCommand}: ${err.message}`));
+    });
+
+    proc.on("close", (exitCode) => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+
+      const durationMs = Date.now() - startTime;
+
+      if (timedOut) {
+        reject(new BinTimeoutError(opts.binCommand, opts.timeoutMs));
+        return;
+      }
+
+      resolve({
+        stdout: stdoutChunks.join(""),
+        stderr: stderrChunks.join(""),
+        exitCode,
+        durationMs,
+        command,
+      });
+    });
+  });
+}

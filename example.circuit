@@ -1,0 +1,14 @@
+# DEFINES
+PROVIDER Openrouter # uses openrouter-compliant API
+API_KEY sk-abc-1234... # API key for PROVIDER
+PROMPT_ENGINEER_MODEL claude-sonnet-4-6 # prompt engineer model 
+RUN_BIN claude --dangerously-skip-permissions --effort max # Bin for RUN
+EVAL_BIN claude --dangerously-skip-permissions --effort max # Bin for EVAL
+DIR ~/autocompress
+
+# start of circuit and name of circuit
+CIRCUIT Make a new compression algorithmn from scratch: 
+  # RUN with a prompt, calls RUN_BIN
+  RUN Make a compression algorithmn from scratch in rust and validate its compression ratios. Our goal is to make the ratio over 99% for all types of text files. 
+  EVAL Evaluate the compression algorithmn and make sure that the ratios are as our goal.
+    RETRY 10 

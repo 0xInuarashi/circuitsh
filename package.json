@@ -1,0 +1,22 @@
+{
+  "name": "circuitsh",
+  "version": "0.1.0",
+  "description": "DSL for AI orchestration — plug AI agents together with eval-retry loops",
+  "type": "module",
+  "bin": {
+    "circuit": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^14.0.3"
+  }
+}
