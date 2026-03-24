@@ -20,30 +20,47 @@ interface CompletionOptions {
   stream?: boolean;
 }
 
+export type RawLogger = (label: string, data: string) => void;
+
 /**
  * OpenRouter API client with streaming SSE support.
  */
 export class OpenRouterClient {
   private apiKey: string;
   private baseUrl: string;
+  private rawLogger: RawLogger | null;
 
-  constructor(apiKey: string, baseUrl: string = OPENROUTER_BASE) {
+  constructor(
+    apiKey: string,
+    baseUrl: string = OPENROUTER_BASE,
+    rawLogger: RawLogger | null = null,
+  ) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
+    this.rawLogger = rawLogger;
+  }
+
+  private raw(label: string, data: unknown): void {
+    if (this.rawLogger) {
+      const str = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+      this.rawLogger(label, str);
+    }
   }
 
   /**
-   * Non-streaming completion. Returns full content string.
+   * Completion that uses streaming internally to avoid timeouts on long requests.
+   * Collects all chunks and returns the full content string.
    */
   async complete(
     model: string,
     messages: Message[],
     temperature: number,
   ): Promise<string> {
-    const resp = await this.request({ model, messages, temperature, stream: false });
-    const data = (await resp.json()) as Record<string, unknown>;
-    const choices = data.choices as Array<{ message?: { content?: string } }> | undefined;
-    return choices?.[0]?.message?.content ?? "";
+    const chunks: string[] = [];
+    for await (const chunk of this.stream(model, messages, temperature)) {
+      chunks.push(chunk.content);
+    }
+    return chunks.join("");
   }
 
   /**
@@ -77,6 +94,7 @@ export class OpenRouterClient {
           if (!line.startsWith("data: ")) continue;
           const dataStr = line.slice(6).trim();
           if (dataStr === "[DONE]") return;
+          this.raw("SSE CHUNK", line);
 
           try {
             const data = JSON.parse(dataStr);
@@ -104,26 +122,39 @@ export class OpenRouterClient {
       stream: options.stream ?? false,
     };
 
+    const url = `${this.baseUrl}/chat/completions`;
+    const headers = {
+      Authorization: `Bearer ${this.apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://github.com/circuitsh",
+      "X-Title": "circuit",
+    };
+
+    this.raw("API REQUEST", {
+      url,
+      method: "POST",
+      headers: { ...headers, Authorization: "Bearer ***" },
+      body: payload,
+    });
+
     const maxRetries429 = 3;
     const maxRetries5xx = 1;
     let retries429 = 0;
     let retries5xx = 0;
 
     while (true) {
-      const resp = await fetch(`${this.baseUrl}/chat/completions`, {
+      const resp = await fetch(url, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://github.com/circuitsh",
-          "X-Title": "circuit",
-        },
+        headers,
         body: JSON.stringify(payload),
       });
+
+      this.raw("API RESPONSE STATUS", `${resp.status} ${resp.statusText}`);
 
       if (resp.ok) return resp;
 
       const body = await resp.text().catch(() => "(could not read body)");
+      this.raw("API ERROR BODY", body);
 
       if (resp.status === 401 || resp.status === 402) {
         throw new AuthError(
@@ -137,7 +168,8 @@ export class OpenRouterClient {
         if (retries429 > maxRetries429) {
           throw new RateLimitError("Rate limit exceeded after retries");
         }
-        await sleep(2000 * retries429); // exponential-ish backoff
+        this.raw("RATE LIMIT", `Retry ${retries429}/${maxRetries429}, sleeping ${2000 * retries429}ms`);
+        await sleep(2000 * retries429);
         continue;
       }
 
@@ -149,6 +181,7 @@ export class OpenRouterClient {
             resp.status,
           );
         }
+        this.raw("PROVIDER ERROR", `Retry ${retries5xx}/${maxRetries5xx}`);
         await sleep(1000);
         continue;
       }

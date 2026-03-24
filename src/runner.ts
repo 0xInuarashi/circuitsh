@@ -37,7 +37,7 @@ export async function runBin(opts: {
     try {
       proc = spawn(cmd, args, {
         cwd: opts.workingDir,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env },
       });
     } catch (err: unknown) {
@@ -93,8 +93,9 @@ export async function runBin(opts: {
         return;
       }
 
+      const rawStdout = stdoutChunks.join("");
       resolve({
-        stdout: stdoutChunks.join(""),
+        stdout: opts.adapter.parseOutput(rawStdout, stderrChunks.join("")),
         stderr: stderrChunks.join(""),
         exitCode,
         durationMs,

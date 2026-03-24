@@ -22,6 +22,7 @@ program
   .option("--api-key <key>", "Override API_KEY")
   .option("--step <n>", "Run only step N (1-indexed)", parseInt)
   .option("--resume <runId>", "Resume from JSONL log")
+  .option("--raw", "Dump all raw API request/response bodies, BIN commands, and traces", false)
   .option("--debug", "Show full tracebacks and raw responses", false)
   .action(async (file: string, options: CLIOptions) => {
     try {
@@ -69,11 +70,13 @@ program
       }
 
       // Execute
-      console.log(`Circuit: ${ast.circuits[0]!.name}`);
-      console.log(`Steps: ${ast.circuits[0]!.steps.length}`);
-      console.log(`RUN_BIN: ${config.runBin}`);
-      console.log(`EVAL_BIN: ${config.evalBin}`);
-      console.log(`DIR: ${config.dir}`);
+      const dim = "\x1b[2m";
+      const bold = "\x1b[1m";
+      const cyan = "\x1b[36m";
+      const reset = "\x1b[0m";
+      console.log(`${bold}${cyan}Circuit:${reset} ${ast.circuits[0]!.name}`);
+      console.log(`${dim}Steps: ${ast.circuits[0]!.steps.length} │ RUN: ${config.runBin} │ EVAL: ${config.evalBin}${reset}`);
+      console.log(`${dim}DIR: ${config.dir}${reset}`);
 
       const success = await executeCircuit(ast, config, options);
       process.exit(success ? 0 : 1);

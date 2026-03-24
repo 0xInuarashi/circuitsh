@@ -205,6 +205,7 @@ export interface SessionAdapter {
     workingDir: string,
   ): string[];
   parseOutput(stdout: string, stderr: string): string;
+  parseStreamChunk?(line: string, level?: "verbose" | "debug"): string | null;
 }
 
 // ── CLI Options ──
@@ -212,6 +213,7 @@ export interface SessionAdapter {
 export interface CLIOptions {
   dryRun: boolean;
   verbose: boolean;
+  raw: boolean;
   logDir?: string;
   apiKey?: string;
   step?: number;

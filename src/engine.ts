@@ -25,6 +25,23 @@ import {
 } from "./storage.ts";
 import { AuthError, BinTimeoutError, RateLimitError } from "./errors.ts";
 
+// ── ANSI Colors ──
+const c = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  cyan: "\x1b[36m",
+  green: "\x1b[32m",
+  red: "\x1b[31m",
+  yellow: "\x1b[33m",
+  magenta: "\x1b[35m",
+  blue: "\x1b[34m",
+  gray: "\x1b[90m",
+  white: "\x1b[97m",
+  bgGreen: "\x1b[42m",
+  bgRed: "\x1b[41m",
+};
+
 /**
  * Execute a parsed circuit.
  */
@@ -34,7 +51,14 @@ export async function executeCircuit(
   cliOptions: CLIOptions,
 ): Promise<boolean> {
   const circuit = ast.circuits[0]!;
-  const client = new OpenRouterClient(config.apiKey, config.apiUrl);
+  const rawLogger = cliOptions.raw
+    ? (label: string, data: string) => {
+        console.log(`\n${c.gray}┌── RAW: ${label} ──${c.reset}`);
+        console.log(`${c.gray}${data}${c.reset}`);
+        console.log(`${c.gray}└── END: ${label} ──${c.reset}\n`);
+      }
+    : null;
+  const client = new OpenRouterClient(config.apiKey, config.apiUrl, rawLogger);
   const harness = new Harness(client, config.promptEngineerModel);
   const runAdapter = detectAdapter(config.runBin);
   const evalAdapter = detectAdapter(config.evalBin);
@@ -69,16 +93,16 @@ export async function executeCircuit(
     }
 
     logStepStart(logPath, stepIndex, step.run.prompt, step.eval?.prompt ?? null);
-    console.log(`\n${"─".repeat(60)}`);
-    console.log(`Step ${stepIndex + 1}/${circuit.steps.length}: RUN`);
-    console.log(`${"─".repeat(60)}`);
+    console.log(`\n${c.cyan}${"─".repeat(60)}${c.reset}`);
+    console.log(`${c.bold}${c.cyan}Step ${stepIndex + 1}/${circuit.steps.length}${c.reset} ${c.dim}│${c.reset} ${c.white}RUN${c.reset}`);
+    console.log(`${c.cyan}${"─".repeat(60)}${c.reset}`);
 
     const state: StepState = {
       stepIndex,
       run: step.run,
       eval: step.eval,
-      runSessionId: `circuit-${sanitizeId(circuit.name)}-step-${stepIndex}-run`,
-      evalSessionId: `circuit-${sanitizeId(circuit.name)}-step-${stepIndex}-eval`,
+      runSessionId: crypto.randomUUID(),
+      evalSessionId: crypto.randomUUID(),
       scratchpad: {},
       engineerScratchpad: {},
       iterations: [],
@@ -92,7 +116,7 @@ export async function executeCircuit(
       const isFirst = iteration === 0;
 
       if (!isFirst) {
-        console.log(`\n  Retry ${iteration}/${maxRetries}...`);
+        console.log(`\n  ${c.yellow}↻ Retry ${iteration}/${maxRetries}${c.reset}`);
       }
 
       try {
@@ -138,33 +162,33 @@ export async function executeCircuit(
 
         // Check verdict
         if (iterResult.verdict === "SUCCESS") {
-          console.log(`  ✓ EVAL passed`);
+          console.log(`  ${c.green}✓ EVAL passed${c.reset}`);
           state.success = true;
           break;
         }
 
         console.log(
-          `  ✗ EVAL failed${iteration < maxRetries ? " — retrying" : " — retries exhausted"}`,
+          `  ${c.red}✗ EVAL failed${iteration < maxRetries ? ` ${c.yellow}— retrying` : ` ${c.dim}— retries exhausted`}${c.reset}`,
         );
       } catch (err) {
         if (err instanceof AuthError) {
-          console.error(`\n  AUTH ERROR: ${err.message}`);
+          console.error(`\n  ${c.red}${c.bold}AUTH ERROR:${c.reset} ${c.red}${err.message}${c.reset}`);
           circuitSuccess = false;
           break;
         }
         if (err instanceof RateLimitError) {
-          console.log(`  Rate limited — waiting 10s...`);
+          console.log(`  ${c.yellow}Rate limited — waiting 10s...${c.reset}`);
           await sleep(10000);
           iteration--; // don't count this as an attempt
           continue;
         }
         if (err instanceof BinTimeoutError) {
-          console.log(`  BIN timed out — counting as failure`);
+          console.log(`  ${c.yellow}BIN timed out — counting as failure${c.reset}`);
           // Continue to next retry
           continue;
         }
         // Unknown error
-        console.error(`  Error: ${err instanceof Error ? err.message : err}`);
+        console.error(`  ${c.red}Error: ${err instanceof Error ? err.message : err}${c.reset}`);
         if (cliOptions.debug) {
           console.error(err);
         }
@@ -178,9 +202,9 @@ export async function executeCircuit(
       completedStepSummaries.push(
         `Step ${stepIndex + 1} (${step.run.prompt.slice(0, 60)}): COMPLETED in ${state.iterations.length} iteration(s)`,
       );
-      console.log(`\n  Step ${stepIndex + 1} completed successfully`);
+      console.log(`\n  ${c.green}${c.bold}Step ${stepIndex + 1} completed successfully${c.reset}`);
     } else {
-      console.log(`\n  Step ${stepIndex + 1} FAILED — circuit aborted`);
+      console.log(`\n  ${c.red}${c.bold}Step ${stepIndex + 1} FAILED${c.reset} ${c.dim}— circuit aborted${c.reset}`);
       circuitSuccess = false;
       break;
     }
@@ -196,16 +220,16 @@ export async function executeCircuit(
     durationMs,
   );
 
-  console.log(`\n${"═".repeat(60)}`);
+  const summaryColor = circuitSuccess ? c.green : c.red;
+  console.log(`\n${summaryColor}${"═".repeat(60)}${c.reset}`);
   console.log(
     circuitSuccess
-      ? `Circuit PASSED — ${stepsCompleted} step(s) completed`
-      : `Circuit FAILED — ${stepsCompleted}/${circuit.steps.length} steps completed`,
+      ? `${c.bold}${c.green}Circuit PASSED${c.reset} ${c.dim}— ${stepsCompleted} step(s) completed${c.reset}`
+      : `${c.bold}${c.red}Circuit FAILED${c.reset} ${c.dim}— ${stepsCompleted}/${circuit.steps.length} steps completed${c.reset}`,
   );
-  console.log(`Total iterations: ${totalIterations}`);
-  console.log(`Duration: ${(durationMs / 1000).toFixed(1)}s`);
-  console.log(`Log: ${logPath}`);
-  console.log(`${"═".repeat(60)}`);
+  console.log(`${c.dim}Iterations: ${totalIterations} │ Duration: ${(durationMs / 1000).toFixed(1)}s${c.reset}`);
+  console.log(`${c.dim}Log: ${logPath}${c.reset}`);
+  console.log(`${summaryColor}${"═".repeat(60)}${c.reset}`);
 
   return circuitSuccess;
 }
@@ -292,18 +316,54 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     executionHistory: state.iterations,
   };
 
-  console.log(`  Expanding RUN prompt...`);
+  const isDebug = cliOptions.debug || cliOptions.raw;
+  const isVerbose = cliOptions.verbose || isDebug;
+  const streamLevel = cliOptions.raw ? "raw" as const
+    : cliOptions.debug ? "debug" as const
+    : cliOptions.verbose ? "verbose" as const
+    : null;
+
+  // ── Expand RUN prompt ──
+  if (isDebug) {
+    console.log(`\n  ${c.magenta}┌─ USER PROMPT (RUN) ──${c.reset}`);
+    console.log(`  ${c.magenta}│${c.reset} ${step.run.prompt}`);
+    console.log(`  ${c.magenta}└──${c.reset}`);
+  }
+  console.log(`  ${c.dim}Expanding RUN prompt via ${config.promptEngineerModel}...${c.reset}`);
   const runExpansion = await harness.expandRun(runContext);
 
   // Update engineer scratchpad
   Object.assign(state.engineerScratchpad, runExpansion.engineerScratchpadUpdates);
 
-  if (cliOptions.verbose) {
-    console.log(`  Expanded RUN prompt (${runExpansion.expandedPrompt.length} chars)`);
+  if (isDebug) {
+    console.log(`\n  ${c.blue}┌─ EXPANDED PROMPT ${c.dim}(${runExpansion.expandedPrompt.length} chars)${c.reset} ${c.blue}──${c.reset}`);
+    console.log(indent(runExpansion.expandedPrompt, `  ${c.blue}│${c.reset} `));
+    console.log(`  ${c.blue}└──${c.reset}`);
+  } else if (isVerbose) {
+    console.log(`  ${c.dim}Expanded RUN prompt (${runExpansion.expandedPrompt.length} chars)${c.reset}`);
+  }
+  if (cliOptions.raw) {
+    rawLog("RAW ENGINEER RESPONSE (RUN)", runExpansion.rawResponse);
   }
 
   // ── Execute RUN_BIN ──
-  console.log(`  Running ${config.runBin.split(" ")[0]}...`);
+  const runCommand = runAdapter.buildCommand(
+    config.runBin,
+    runExpansion.expandedPrompt,
+    state.runSessionId,
+    isFirst,
+    config.dir,
+  );
+  if (isDebug) {
+    const displayCmd = runCommand.map((a, i) =>
+      i === runCommand.length - 1 && a.length > 200 ? `"${a.slice(0, 100)}..."` : a
+    ).join(" ");
+    console.log(`\n  ${c.gray}┌─ BIN COMMAND ──${c.reset}`);
+    console.log(`  ${c.gray}│${c.reset} ${c.dim}${displayCmd}${c.reset}`);
+    console.log(`  ${c.gray}└──${c.reset}`);
+  }
+
+  console.log(`  ${c.cyan}Running ${config.runBin.split(" ")[0]}...${c.reset}`);
   const runOutput = await runBin({
     adapter: runAdapter,
     binCommand: config.runBin,
@@ -312,13 +372,20 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     isFirst,
     workingDir: config.dir,
     timeoutMs: config.timeout * 1000,
-    onStdout: cliOptions.verbose ? (c) => process.stdout.write(c) : undefined,
-    onStderr: cliOptions.debug ? (c) => process.stderr.write(c) : undefined,
+    onStdout: streamLevel
+      ? makeStreamHandler(runAdapter, streamLevel)
+      : undefined,
+    onStderr: isDebug ? (c) => process.stderr.write(c) : undefined,
   });
 
+  const runExitColor = runOutput.exitCode === 0 ? c.green : c.red;
   console.log(
-    `  RUN completed (exit ${runOutput.exitCode}, ${(runOutput.durationMs / 1000).toFixed(1)}s)`,
+    `\n  ${runExitColor}RUN completed${c.reset} ${c.dim}(exit ${runOutput.exitCode}, ${(runOutput.durationMs / 1000).toFixed(1)}s)${c.reset}`,
   );
+  if (cliOptions.raw) {
+    rawLog("RUN STDOUT", runOutput.stdout);
+    rawLog("RUN STDERR", runOutput.stderr);
+  }
 
   // ── If no EVAL, we're done ──
   if (!step.eval) {
@@ -364,16 +431,44 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     executionHistory: state.iterations,
   };
 
-  console.log(`  Expanding EVAL prompt...`);
+  if (isDebug) {
+    console.log(`\n  ${c.magenta}┌─ USER PROMPT (EVAL) ──${c.reset}`);
+    console.log(`  ${c.magenta}│${c.reset} ${step.eval.prompt}`);
+    console.log(`  ${c.magenta}└──${c.reset}`);
+  }
+  console.log(`  ${c.dim}Expanding EVAL prompt via ${config.promptEngineerModel}...${c.reset}`);
   const evalExpansion = await harness.expandEval(evalContext);
   Object.assign(state.engineerScratchpad, evalExpansion.engineerScratchpadUpdates);
 
-  if (cliOptions.verbose) {
-    console.log(`  Expanded EVAL prompt (${evalExpansion.expandedPrompt.length} chars)`);
+  if (isDebug) {
+    console.log(`\n  ${c.blue}┌─ EXPANDED EVAL PROMPT ${c.dim}(${evalExpansion.expandedPrompt.length} chars)${c.reset} ${c.blue}──${c.reset}`);
+    console.log(indent(evalExpansion.expandedPrompt, `  ${c.blue}│${c.reset} `));
+    console.log(`  ${c.blue}└──${c.reset}`);
+  } else if (isVerbose) {
+    console.log(`  ${c.dim}Expanded EVAL prompt (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
+  }
+  if (cliOptions.raw) {
+    rawLog("RAW ENGINEER RESPONSE (EVAL)", evalExpansion.rawResponse);
   }
 
   // ── Execute EVAL_BIN ──
-  console.log(`  Running EVAL...`);
+  const evalCommand = evalAdapter.buildCommand(
+    config.evalBin,
+    evalExpansion.expandedPrompt,
+    state.evalSessionId,
+    isFirst,
+    config.dir,
+  );
+  if (isDebug) {
+    const displayCmd = evalCommand.map((a, i) =>
+      i === evalCommand.length - 1 && a.length > 200 ? `"${a.slice(0, 100)}..."` : a
+    ).join(" ");
+    console.log(`\n  ${c.gray}┌─ EVAL BIN COMMAND ──${c.reset}`);
+    console.log(`  ${c.gray}│${c.reset} ${c.dim}${displayCmd}${c.reset}`);
+    console.log(`  ${c.gray}└──${c.reset}`);
+  }
+
+  console.log(`  ${c.cyan}Running EVAL...${c.reset}`);
   const evalOutput = await runBin({
     adapter: evalAdapter,
     binCommand: config.evalBin,
@@ -382,13 +477,33 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     isFirst,
     workingDir: config.dir,
     timeoutMs: config.timeout * 1000,
-    onStdout: cliOptions.verbose ? (c) => process.stdout.write(c) : undefined,
-    onStderr: cliOptions.debug ? (c) => process.stderr.write(c) : undefined,
+    onStdout: streamLevel
+      ? makeStreamHandler(evalAdapter, streamLevel)
+      : undefined,
+    onStderr: isDebug ? (c) => process.stderr.write(c) : undefined,
   });
+
+  if (cliOptions.raw) {
+    rawLog("EVAL STDOUT", evalOutput.stdout);
+    rawLog("EVAL STDERR", evalOutput.stderr);
+  }
 
   // Parse verdict
   const { success, feedback } = parseVerdict(evalOutput.stdout);
   const verdict = success ? "SUCCESS" : "FAILURE";
+
+  if (isDebug) {
+    const verdictColor = verdict === "SUCCESS" ? c.green : c.red;
+    console.log(`\n  ${verdictColor}┌─ VERDICT: ${verdict} ──${c.reset}`);
+    if (feedback) {
+      console.log(indent(feedback.slice(0, 500), `  ${verdictColor}│${c.reset} `));
+    }
+    console.log(`  ${verdictColor}└──${c.reset}`);
+  }
+  if (cliOptions.raw) {
+    rawLog("VERDICT", verdict);
+    rawLog("FEEDBACK", feedback);
+  }
 
   return {
     stepIndex: state.stepIndex,
@@ -452,11 +567,47 @@ function getDirectoryDiff(dir: string): string {
   }
 }
 
+function indent(text: string, prefix: string): string {
+  return text.split("\n").map((l) => `${prefix}${l}`).join("\n");
+}
+
 function sanitizeId(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .slice(0, 40);
+}
+
+/**
+ * Create a stdout handler that parses stream-json for live display.
+ *   "raw"     — dump raw JSON lines (everything)
+ *   "debug"   — parsed: text + tool calls + tool results + summary
+ *   "verbose" — parsed: main text content only
+ */
+function makeStreamHandler(
+  adapter: import("./types.ts").SessionAdapter,
+  level: "raw" | "debug" | "verbose",
+): (chunk: string) => void {
+  if (level === "raw" || !adapter.parseStreamChunk) {
+    return (c) => process.stdout.write(c);
+  }
+  const parseLevel = level === "debug" ? "debug" : "verbose";
+  let buffer = "";
+  return (chunk: string) => {
+    buffer += chunk;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const display = adapter.parseStreamChunk!(line, parseLevel);
+      if (display) process.stdout.write(display);
+    }
+  };
+}
+
+function rawLog(label: string, data: string): void {
+  console.log(`\n${c.gray}┌── RAW: ${label} ──${c.reset}`);
+  console.log(`${c.gray}${data}${c.reset}`);
+  console.log(`${c.gray}└── END: ${label} ──${c.reset}\n`);
 }
 
 function sleep(ms: number): Promise<void> {

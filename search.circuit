@@ -1,0 +1,27 @@
+# DEFINES
+PROVIDER Openrouter
+API_KEY sk-hypercanvas-ea5ae94a72a89e837e07a226742cfb68cc67d2c327570c24
+API_URL https://claude-oauth-api-0xtayzon-production.up.railway.app/api/v1
+PROMPT_ENGINEER_MODEL anthropic/claude-haiku-4-5
+RUN_BIN claude --dangerously-skip-permissions --effort max --model claude-haiku-4-5
+EVAL_BIN claude --dangerously-skip-permissions --effort max --model claude-haiku-4-5
+DIR ~/circuitsearch
+CHECKPOINT on
+
+# Build a local search engine
+CIRCUIT Build a search engine with indexing, ranking, and query support:
+  RUN Build a search engine in Python. It should: \
+    1. Accept a directory of .txt files and build an inverted index \
+    2. Support TF-IDF ranking for search queries \
+    3. Handle multi-word queries (AND semantics — all terms must appear) \
+    4. Return results ranked by relevance score \
+    5. Include a CLI: `python search.py index <dir>` and `python search.py query "some words"` \
+    6. Create 5+ sample .txt documents in a testdata/ folder covering different topics \
+    7. Store the index as JSON so it persists between runs
+  EVAL Run the search engine end-to-end: \
+    1. Index the testdata/ directory: `python search.py index testdata/` \
+    2. Run at least 3 queries that should return results and verify they do \
+    3. Run a query for a term that doesn't exist and verify it returns no results \
+    4. Verify ranking makes sense — a document mentioning the query term more often should rank higher \
+    5. Verify the index JSON file was created and is valid JSON
+    RETRY 3

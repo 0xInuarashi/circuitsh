@@ -7,7 +7,7 @@
     "circuit": "./src/cli.ts"
   },
   "scripts": {
-    "start": "bun run src/cli.ts",
+    "circuit": "bun run src/cli.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

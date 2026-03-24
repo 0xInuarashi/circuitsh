@@ -1,10 +1,12 @@
 # DEFINES
 PROVIDER Openrouter
-API_KEY ${OPENROUTER_API_KEY}
-API_URL https://openrouter.ai/api/v1
-PROMPT_ENGINEER_MODEL anthropic/claude-sonnet-4-6
-RUN_BIN claude --dangerously-skip-permissions --effort max
-EVAL_BIN claude --dangerously-skip-permissions --effort max
+API_KEY sk-hypercanvas-ea5ae94a72a89e837e07a226742cfb68cc67d2c327570c24
+# API_URL https://claude-oauth-api-production.up.railway.app/api/v1
+API_URL https://claude-oauth-api-0xtayzon-production.up.railway.app/api/v1
+PROMPT_ENGINEER_MODEL anthropic/claude-haiku-4-5
+# PROMPT_ENGINEER_MODEL anthropic/claude-opus-4-6
+RUN_BIN claude --dangerously-skip-permissions --effort max --model claude-haiku-4-5
+EVAL_BIN claude --dangerously-skip-permissions --effort max --model claude-haiku-4-5
 DIR ~/circuitsort
 CHECKPOINT on
 
