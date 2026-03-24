@@ -1,5 +1,5 @@
 import { execSync } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { platform, release } from "os";
 import type {
   CircuitAST,
@@ -34,11 +34,17 @@ export async function executeCircuit(
   cliOptions: CLIOptions,
 ): Promise<boolean> {
   const circuit = ast.circuits[0]!;
-  const client = new OpenRouterClient(config.apiKey);
+  const client = new OpenRouterClient(config.apiKey, config.apiUrl);
   const harness = new Harness(client, config.promptEngineerModel);
   const runAdapter = detectAdapter(config.runBin);
   const evalAdapter = detectAdapter(config.evalBin);
   const env = getEnvironment(config);
+
+  // Ensure working directory exists
+  if (!existsSync(config.dir)) {
+    mkdirSync(config.dir, { recursive: true });
+    console.log(`Created directory: ${config.dir}`);
+  }
 
   const logPath = makeLogPath(circuit.name, config.logDir);
   logCircuitStart(logPath, circuit.name, config, circuit.steps);

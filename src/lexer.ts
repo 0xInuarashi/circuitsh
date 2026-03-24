@@ -4,6 +4,7 @@ import { ParseError } from "./errors.ts";
 const DEFINE_KEYWORDS = new Set([
   "PROVIDER",
   "API_KEY",
+  "API_URL",
   "PROMPT_ENGINEER_MODEL",
   "RUN_BIN",
   "EVAL_BIN",

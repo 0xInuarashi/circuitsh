@@ -56,6 +56,7 @@ export interface Token {
 export interface CircuitConfig {
   provider: string;
   apiKey: string;
+  apiUrl: string;
   promptEngineerModel: string;
   runBin: string;
   evalBin: string;
@@ -67,7 +68,8 @@ export interface CircuitConfig {
 
 export const CONFIG_DEFAULTS: Partial<CircuitConfig> = {
   provider: "openrouter",
-  promptEngineerModel: "anthropic/claude-haiku-4-5",
+  apiUrl: "https://openrouter.ai/api/v1",
+  promptEngineerModel: "anthropic/claude-sonnet-4-6",
   dir: ".",
   logDir: ".circuit-runs",
   checkpoint: false,
@@ -78,6 +80,7 @@ export const CONFIG_DEFAULTS: Partial<CircuitConfig> = {
 export const DEFINE_KEY_MAP: Record<string, keyof CircuitConfig> = {
   PROVIDER: "provider",
   API_KEY: "apiKey",
+  API_URL: "apiUrl",
   PROMPT_ENGINEER_MODEL: "promptEngineerModel",
   RUN_BIN: "runBin",
   EVAL_BIN: "evalBin",
@@ -91,7 +94,9 @@ export const DEFINE_KEY_MAP: Record<string, keyof CircuitConfig> = {
 export const ENV_VAR_MAP: Record<string, keyof CircuitConfig> = {
   CIRCUIT_PROVIDER: "provider",
   CIRCUIT_API_KEY: "apiKey",
+  CIRCUIT_API_URL: "apiUrl",
   OPENROUTER_API_KEY: "apiKey",
+  OPENROUTER_API_URL: "apiUrl",
   CIRCUIT_PROMPT_ENGINEER_MODEL: "promptEngineerModel",
   CIRCUIT_RUN_BIN: "runBin",
   CIRCUIT_EVAL_BIN: "evalBin",

@@ -1,0 +1,23 @@
+# DEFINES
+PROVIDER Openrouter
+API_KEY ${OPENROUTER_API_KEY}
+API_URL https://openrouter.ai/api/v1
+PROMPT_ENGINEER_MODEL anthropic/claude-sonnet-4-6
+RUN_BIN claude --dangerously-skip-permissions --effort max
+EVAL_BIN claude --dangerously-skip-permissions --effort max
+DIR ~/circuitsort
+CHECKPOINT on
+
+# Build a novel sorting algorithm that beats quicksort on real-world data
+CIRCUIT Build a sorting algorithm that consistently beats std lib sort on real-world benchmarks:
+  RUN Create a novel sorting algorithm in Rust that outperforms the standard library sort (pdqsort/TimSort hybrid) \
+    on real-world data distributions. The algorithm must handle all of: nearly-sorted data, reverse-sorted data, \
+    data with many duplicates, random uniform data, and zipfian-distributed data. \
+    Build a comprehensive benchmark suite that tests arrays of sizes 100, 10000, and 1000000 elements \
+    across all distributions. The algorithm must be faster than std sort on at least 80% of benchmark cases. \
+    Include proper statistical measurement with multiple iterations per benchmark.
+  EVAL Run the full benchmark suite (cargo bench or cargo run --release). \
+    Verify that the custom sort beats std sort on at least 80% of the benchmark cases. \
+    Check that the algorithm is correct (sorted output matches std sort output for all test cases). \
+    Check that it handles edge cases: empty arrays, single element, all identical elements, i32::MIN and i32::MAX values.
+    RETRY 10
