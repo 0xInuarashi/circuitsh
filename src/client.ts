@@ -71,46 +71,64 @@ export class OpenRouterClient {
     messages: Message[],
     temperature: number,
   ): AsyncGenerator<StreamChunk> {
-    const resp = await this.request({ model, messages, temperature, stream: true });
+    const maxStreamRetries = 3;
 
-    if (!resp.body) {
-      throw new PromptEngineerError("No response body for streaming request");
-    }
+    for (let attempt = 0; attempt <= maxStreamRetries; attempt++) {
+      const resp = await this.request({ model, messages, temperature, stream: true });
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+      if (!resp.body) {
+        throw new PromptEngineerError("No response body for streaming request");
+      }
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let gotData = false;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const dataStr = line.slice(6).trim();
-          if (dataStr === "[DONE]") return;
-          this.raw("SSE CHUNK", line);
+          gotData = true;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
 
-          try {
-            const data = JSON.parse(dataStr);
-            const delta = data.choices?.[0]?.delta ?? {};
-            const content = delta.content ?? "";
-            const reasoning = delta.reasoning ?? "";
-            if (content || reasoning) {
-              yield { content, reasoning };
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const dataStr = line.slice(6).trim();
+            if (dataStr === "[DONE]") return;
+            this.raw("SSE CHUNK", line);
+
+            try {
+              const data = JSON.parse(dataStr);
+              const delta = data.choices?.[0]?.delta ?? {};
+              const content = delta.content ?? "";
+              const reasoning = delta.reasoning ?? "";
+              if (content || reasoning) {
+                yield { content, reasoning };
+              }
+            } catch {
+              // skip malformed JSON chunks
             }
-          } catch {
-            // skip malformed JSON chunks
           }
         }
+        // Stream completed normally
+        return;
+      } catch (err) {
+        reader.releaseLock();
+        const msg = err instanceof Error ? err.message : String(err);
+        if (attempt >= maxStreamRetries) {
+          throw new ProviderError(`Stream failed after ${maxStreamRetries} retries: ${msg}`, 0);
+        }
+        this.raw("STREAM ERROR", `${msg} — retry ${attempt + 1}/${maxStreamRetries}${gotData ? " (partial data received, restarting)" : ""}`);
+        await sleep(1000 * (attempt + 1));
+        // Retry the entire request — can't resume SSE mid-stream
+        continue;
+      } finally {
+        try { reader.releaseLock(); } catch { /* already released */ }
       }
-    } finally {
-      reader.releaseLock();
     }
   }
 

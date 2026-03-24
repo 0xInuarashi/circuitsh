@@ -103,10 +103,14 @@ export async function executeCircuit(
       eval: step.eval,
       runSessionId: crypto.randomUUID(),
       evalSessionId: crypto.randomUUID(),
+      runSessionCreated: false,
+      evalSessionCreated: false,
       scratchpad: {},
       engineerScratchpad: {},
       iterations: [],
       success: false,
+      cachedRunExpansion: null,
+      cachedEvalExpansion: null,
     };
 
     const maxRetries = step.eval?.retry ?? 0;
@@ -153,6 +157,10 @@ export async function executeCircuit(
         );
 
         totalIterations++;
+
+        // Iteration completed — clear expansion caches (next retry needs fresh expansion with new feedback)
+        state.cachedRunExpansion = null;
+        state.cachedEvalExpansion = null;
 
         // No EVAL — fire and forget
         if (!step.eval) {
@@ -357,39 +365,50 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     : cliOptions.verbose ? "verbose" as const
     : null;
 
-  // ── Expand RUN prompt ──
-  if (isDebug) {
-    console.log(`\n  ${c.magenta}┌─ USER PROMPT (RUN) ──${c.reset}`);
-    console.log(`  ${c.magenta}│${c.reset} ${step.run.prompt}`);
-    console.log(`  ${c.magenta}└──${c.reset}`);
+  // ── Expand RUN prompt (or reuse cache) ──
+  let runExpansion: import("./types.ts").ExpansionResult;
+  if (state.cachedRunExpansion) {
+    runExpansion = state.cachedRunExpansion;
+    state.cachedRunExpansion = null;
+    console.log(`  ${c.dim}Reusing cached RUN expansion (${runExpansion.expandedPrompt.length} chars)${c.reset}`);
+  } else {
+    if (isDebug) {
+      console.log(`\n  ${c.magenta}┌─ USER PROMPT (RUN) ──${c.reset}`);
+      console.log(`  ${c.magenta}│${c.reset} ${step.run.prompt}`);
+      console.log(`  ${c.magenta}└──${c.reset}`);
+    }
+    console.log(`  ${c.dim}Expanding RUN prompt via ${config.promptEngineerModel}...${c.reset}`);
+    if (isDebug) {
+      process.stdout.write(`\n  ${c.blue}┌─ EXPANDED PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
+    }
+    runExpansion = await harness.expandRun(
+      runContext,
+      isDebug ? (chunk) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+    );
+
+    if (isDebug) {
+      console.log(`\n  ${c.blue}└── ${c.dim}(${runExpansion.expandedPrompt.length} chars)${c.reset}`);
+    } else if (isVerbose) {
+      console.log(`  ${c.dim}Expanded RUN prompt (${runExpansion.expandedPrompt.length} chars)${c.reset}`);
+    }
+    if (cliOptions.raw) {
+      rawLog("RAW ENGINEER RESPONSE (RUN)", runExpansion.rawResponse);
+    }
   }
-  console.log(`  ${c.dim}Expanding RUN prompt via ${config.promptEngineerModel}...${c.reset}`);
-  if (isDebug) {
-    process.stdout.write(`\n  ${c.blue}┌─ EXPANDED PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
-  }
-  const runExpansion = await harness.expandRun(
-    runContext,
-    isDebug ? (chunk) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
-  );
+
+  // Cache expansion in case BIN fails and we need to retry
+  state.cachedRunExpansion = runExpansion;
 
   // Update engineer scratchpad
   Object.assign(state.engineerScratchpad, runExpansion.engineerScratchpadUpdates);
 
-  if (isDebug) {
-    console.log(`\n  ${c.blue}└── ${c.dim}(${runExpansion.expandedPrompt.length} chars)${c.reset}`);
-  } else if (isVerbose) {
-    console.log(`  ${c.dim}Expanded RUN prompt (${runExpansion.expandedPrompt.length} chars)${c.reset}`);
-  }
-  if (cliOptions.raw) {
-    rawLog("RAW ENGINEER RESPONSE (RUN)", runExpansion.rawResponse);
-  }
-
   // ── Execute RUN_BIN ──
+  const runIsNewSession = !state.runSessionCreated;
   const runCommand = runAdapter.buildCommand(
     config.runBin,
     runExpansion.expandedPrompt,
     state.runSessionId,
-    isFirst,
+    runIsNewSession,
     config.dir,
   );
   if (isDebug) {
@@ -407,7 +426,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     binCommand: config.runBin,
     prompt: runExpansion.expandedPrompt,
     sessionId: state.runSessionId,
-    isFirst,
+    isFirst: runIsNewSession,
     workingDir: config.dir,
     timeoutMs: config.timeout * 1000,
     onStdout: streamLevel
@@ -415,6 +434,19 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
       : undefined,
     onStderr: isDebug ? (c) => process.stderr.write(c) : undefined,
   });
+
+  // Track session creation — if BIN produced output, session exists
+  if (runOutput.exitCode !== null && runOutput.stdout.length > 0) {
+    state.runSessionCreated = true;
+  }
+  // Detect error_during_execution (session resume failed) — reset session
+  if (runOutput.stdout.includes('"subtype":"error_during_execution"') || runOutput.stdout.includes('"is_error":true')) {
+    if (!runIsNewSession) {
+      console.log(`  ${c.yellow}Session resume failed — will start fresh next retry${c.reset}`);
+      state.runSessionCreated = false;
+      state.runSessionId = crypto.randomUUID();
+    }
+  }
 
   const runExitColor = runOutput.exitCode === 0 ? c.green : c.red;
   console.log(
@@ -469,36 +501,49 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     executionHistory: state.iterations,
   };
 
-  if (isDebug) {
-    console.log(`\n  ${c.magenta}┌─ USER PROMPT (EVAL) ──${c.reset}`);
-    console.log(`  ${c.magenta}│${c.reset} ${step.eval.prompt}`);
-    console.log(`  ${c.magenta}└──${c.reset}`);
+  // ── Expand EVAL prompt (or reuse cache) ──
+  let evalExpansion: import("./types.ts").ExpansionResult;
+  if (state.cachedEvalExpansion) {
+    evalExpansion = state.cachedEvalExpansion;
+    state.cachedEvalExpansion = null;
+    console.log(`  ${c.dim}Reusing cached EVAL expansion (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
+  } else {
+    if (isDebug) {
+      console.log(`\n  ${c.magenta}┌─ USER PROMPT (EVAL) ──${c.reset}`);
+      console.log(`  ${c.magenta}│${c.reset} ${step.eval.prompt}`);
+      console.log(`  ${c.magenta}└──${c.reset}`);
+    }
+    console.log(`  ${c.dim}Expanding EVAL prompt via ${config.promptEngineerModel}...${c.reset}`);
+    if (isDebug) {
+      process.stdout.write(`\n  ${c.blue}┌─ EXPANDED EVAL PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
+    }
+    evalExpansion = await harness.expandEval(
+      evalContext,
+      isDebug ? (chunk) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+    );
+
+    if (isDebug) {
+      console.log(`\n  ${c.blue}└── ${c.dim}(${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
+    } else if (isVerbose) {
+      console.log(`  ${c.dim}Expanded EVAL prompt (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
+    }
+    if (cliOptions.raw) {
+      rawLog("RAW ENGINEER RESPONSE (EVAL)", evalExpansion.rawResponse);
+    }
   }
-  console.log(`  ${c.dim}Expanding EVAL prompt via ${config.promptEngineerModel}...${c.reset}`);
-  if (isDebug) {
-    process.stdout.write(`\n  ${c.blue}┌─ EXPANDED EVAL PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
-  }
-  const evalExpansion = await harness.expandEval(
-    evalContext,
-    isDebug ? (chunk) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
-  );
+
+  // Cache expansion in case BIN fails and we need to retry
+  state.cachedEvalExpansion = evalExpansion;
+
   Object.assign(state.engineerScratchpad, evalExpansion.engineerScratchpadUpdates);
 
-  if (isDebug) {
-    console.log(`\n  ${c.blue}└── ${c.dim}(${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
-  } else if (isVerbose) {
-    console.log(`  ${c.dim}Expanded EVAL prompt (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
-  }
-  if (cliOptions.raw) {
-    rawLog("RAW ENGINEER RESPONSE (EVAL)", evalExpansion.rawResponse);
-  }
-
   // ── Execute EVAL_BIN ──
+  const evalIsNewSession = !state.evalSessionCreated;
   const evalCommand = evalAdapter.buildCommand(
     config.evalBin,
     evalExpansion.expandedPrompt,
     state.evalSessionId,
-    isFirst,
+    evalIsNewSession,
     config.dir,
   );
   if (isDebug) {
@@ -516,7 +561,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     binCommand: config.evalBin,
     prompt: evalExpansion.expandedPrompt,
     sessionId: state.evalSessionId,
-    isFirst,
+    isFirst: evalIsNewSession,
     workingDir: config.dir,
     timeoutMs: config.timeout * 1000,
     onStdout: streamLevel
@@ -524,6 +569,19 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
       : undefined,
     onStderr: isDebug ? (c) => process.stderr.write(c) : undefined,
   });
+
+  // Track session creation
+  if (evalOutput.exitCode !== null && evalOutput.stdout.length > 0) {
+    state.evalSessionCreated = true;
+  }
+  // Detect error_during_execution — reset session for next retry
+  if (evalOutput.stdout.includes('"subtype":"error_during_execution"') || evalOutput.stdout.includes('"is_error":true')) {
+    if (!evalIsNewSession) {
+      console.log(`  ${c.yellow}EVAL session resume failed — will start fresh next retry${c.reset}`);
+      state.evalSessionCreated = false;
+      state.evalSessionId = crypto.randomUUID();
+    }
+  }
 
   if (cliOptions.raw) {
     rawLog("EVAL STDOUT", evalOutput.stdout);

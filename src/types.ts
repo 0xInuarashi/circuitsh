@@ -139,10 +139,15 @@ export interface StepState {
   eval: EvalStep | null;
   runSessionId: string;
   evalSessionId: string;
+  runSessionCreated: boolean;
+  evalSessionCreated: boolean;
   scratchpad: Record<string, string>;
   engineerScratchpad: Record<string, string>;
   iterations: IterationResult[];
   success: boolean;
+  /** Cached expansion from previous iteration — reused if BIN fails before next expansion */
+  cachedRunExpansion: ExpansionResult | null;
+  cachedEvalExpansion: ExpansionResult | null;
 }
 
 export interface CircuitRunState {
