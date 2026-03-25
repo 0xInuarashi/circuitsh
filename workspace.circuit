@@ -1,0 +1,85 @@
+● # ── Aliases ──                                                                                       
+  ALIAS claude "claude --dangerously-skip-permissions --effort max"                                   
+  ALIAS claude-fast "claude --dangerously-skip-permissions"                                             
+  ALIAS aider "aider --model sonnet"                                                                    
+  ALIAS bench "./scripts/bench.sh"                                                                      
+  ALIAS verify "./scripts/verify.sh"                                                                    
+                                                                  
+  # ── Defaults ──                                                                                      
+  PROVIDER openrouter                                             
+  API_KEY ${OPENROUTER_API_KEY}                           
+  PROMPT_ENGINEER_MODEL claude-haiku-4-5
+  RUN_BIN claude
+  EVAL_BIN verify                                                                                       
+  DIR ~/search-engine                                                                                   
+  TIMEOUT 300
+  CHECKPOINT on                                                                                         
+                                                                                                        
+  CIRCUIT Build a production search engine:
+                                                                                                        
+    # Step 1: Scaffold — fire and forget, default bins                                                  
+    RUN "initialize the project with cargo init, set up module structure \
+      for indexer, query engine, and HTTP server"                                                       
+                                                                  
+    # Step 2: Build indexer — explicit expansion, custom focus                                          
+    EXPAND AS "anthropic/claude-sonnet-4-6" \                     
+      FOR "build the document indexer" \                                                                
+      FOCUS "optimize for write throughput and concurrent indexing. \
+        use memory-mapped files for the inverted index. \                                               
+        handle crash recovery with a write-ahead log." \          
+      INTO:
+        RUN WITH claude                                                                              
+    
+    EXPAND AS "anthropic/claude-sonnet-4-6" \                     
+      FOR "verify the indexer handles load and failures" \                                              
+      FOCUS "test with 1M documents, verify crash recovery by killing \                                 
+        mid-index and restarting, check for index corruption, \                                         
+        measure sustained write throughput" \                                                           
+      INTO:
+        EVAL WITH bench                                                                              
+        RETRY 8                                                     
+                                                                                                        
+    # Step 3: Query engine — different expansion model, different runner                                
+    EXPAND AS "deepseek/deepseek-r1" \
+      FOR "build the query engine with TF-IDF ranking" \                                                
+      FOCUS "optimize for p99 latency under 10ms. support fuzzy matching \                              
+        and typo tolerance. ranking quality is more important than speed \
+        past the 10ms threshold." \                                                                     
+      INTO:
+        RUN WITH aider                                                                               
+    
+    EVAL "query engine returns relevant results for test suite" WITH verify                             
+      RETRY 5                                                                                           
+                                                                  
+    # Step 4: HTTP server — simple step, no custom expansion needed                                     
+    RUN "add HTTP server with /index and /search endpoints" WITH claude-fast
+    EVAL "server starts, accepts requests, returns JSON responses" WITH verify                          
+      RETRY 3                                                                                           
+                                                                                                        
+    # Step 5: Integration + optimization — full power                                                   
+    EXPAND AS "anthropic/claude-sonnet-4-6" \                     
+      FOR "end-to-end optimization pass" \                                                              
+      FOCUS "profile the full pipeline: index → query → HTTP response. \
+        target p99 under 50ms for /search with 10M indexed documents. \                                 
+        do not sacrifice correctness for speed. \                                                       
+        use flamegraph to identify hot paths." \                                                        
+      INTO:
+        RUN WITH claude                                                                              
+    
+    EXPAND AS "anthropic/claude-sonnet-4-6" \                     
+      FOR "full system benchmark" \                                                                     
+      FOCUS "run under realistic load: 100 concurrent users, mixed \
+        read/write workload. measure p50/p95/p99 latency, throughput, \                                 
+        memory usage. compare against baseline from step 3. \                                           
+        fail if p99 > 50ms or memory > 2GB." \                                                          
+      INTO:
+        EVAL WITH bench                                                                              
+        RETRY 10  
+
+      RUN "make a cloudflare connector"
+        ALLOW_REQUEST "an API key is required"
+        ALLOW_REQUEST "condition 2"
+        ALLOW_REQUEST "..."
+        NOTIFY ./notify.sh --message "make a cloudflare connector needs a request"
+        REQUEST_TIMEOUT 600
+        RETRY 5
