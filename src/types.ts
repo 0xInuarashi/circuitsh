@@ -212,11 +212,22 @@ export interface ExpansionContext {
   allowRequests?: string[]; // ALLOW_REQUEST conditions — enables request_input
 }
 
+export interface MachineInfo {
+  cpuModel: string;
+  cpuCores: number;
+  ramTotalMB: number;
+  ramFreeMB: number;
+  diskTotalGB: number;
+  diskFreeGB: number;
+  gpu: string | null; // null = no GPU detected
+}
+
 export interface EnvironmentInfo {
   os: string;
   shell: string;
   cwd: string;
   date: string;
+  machine: MachineInfo;
 }
 
 export interface ExpansionResult {

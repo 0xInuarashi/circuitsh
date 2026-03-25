@@ -1,7 +1,7 @@
 import { execSync, spawn as spawnProcess } from "child_process";
 import { createInterface } from "readline";
 import { existsSync, mkdirSync } from "fs";
-import { platform, release } from "os";
+import { platform, release, cpus, totalmem, freemem } from "os";
 import type {
   CircuitAST,
   CircuitConfig,
@@ -651,7 +651,45 @@ function getEnvironment(config: CircuitConfig): EnvironmentInfo {
     shell: process.env.SHELL ?? "/bin/sh",
     cwd: config.dir,
     date: new Date().toISOString(),
+    machine: getMachineInfo(),
   };
+}
+
+function getMachineInfo(): import("./types.ts").MachineInfo {
+  const cpuList = cpus();
+  const cpuModel = cpuList[0]?.model ?? "unknown";
+  const cpuCores = cpuList.length;
+  const ramTotalMB = Math.round(totalmem() / 1024 / 1024);
+  const ramFreeMB = Math.round(freemem() / 1024 / 1024);
+
+  // Disk: df on the root partition
+  let diskTotalGB = 0;
+  let diskFreeGB = 0;
+  try {
+    const df = execSync("df -BG / | tail -1", { encoding: "utf-8", timeout: 3000 });
+    const parts = df.trim().split(/\s+/);
+    diskTotalGB = parseInt(parts[1] ?? "0", 10);
+    diskFreeGB = parseInt(parts[3] ?? "0", 10);
+  } catch { /* non-fatal */ }
+
+  // GPU: nvidia-smi first, then lspci fallback
+  let gpu: string | null = null;
+  try {
+    gpu = execSync("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null", {
+      encoding: "utf-8",
+      timeout: 3000,
+    }).trim() || null;
+  } catch {
+    try {
+      const lspci = execSync("lspci 2>/dev/null | grep -i 'vga\\|3d\\|display'", {
+        encoding: "utf-8",
+        timeout: 3000,
+      }).trim();
+      if (lspci) gpu = lspci.split("\n")[0]!.replace(/^[^ ]+ /, "");
+    } catch { /* no GPU */ }
+  }
+
+  return { cpuModel, cpuCores, ramTotalMB, ramFreeMB, diskTotalGB, diskFreeGB, gpu };
 }
 
 function getDirectorySnapshot(dir: string): string {

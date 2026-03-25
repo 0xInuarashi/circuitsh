@@ -300,13 +300,18 @@ export class Harness {
       );
     }
 
-    // Environment
+    // Environment + machine context
+    const m = context.environment.machine;
     sections.push(
       `ENVIRONMENT:\n` +
         `  os: ${context.environment.os}\n` +
         `  shell: ${context.environment.shell}\n` +
         `  working_directory: ${context.environment.cwd}\n` +
-        `  date: ${context.environment.date}`,
+        `  date: ${context.environment.date}\n` +
+        `  cpu: ${m.cpuModel} (${m.cpuCores} cores)\n` +
+        `  ram: ${m.ramFreeMB}MB free / ${m.ramTotalMB}MB total\n` +
+        `  disk: ${m.diskFreeGB}GB free / ${m.diskTotalGB}GB total\n` +
+        `  gpu: ${m.gpu ?? "none"}`,
     );
 
     // Execution history (compressed for context window, full available)
