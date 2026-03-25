@@ -120,6 +120,104 @@ function parseWithClause(body: string): { prompt: string; bin: string | null } {
 }
 
 /**
+ * Find a keyword position in text, respecting double-quoted strings.
+ * Returns the index of the keyword start, or -1 if not found.
+ */
+function findUnquotedKeyword(text: string, keyword: string): number {
+  let inQuote = false;
+  for (let i = 0; i <= text.length - keyword.length; i++) {
+    if (text[i] === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+    if (!inQuote) {
+      const before = i === 0 || text[i - 1] === " ";
+      const match = text.substring(i, i + keyword.length) === keyword;
+      const after =
+        i + keyword.length >= text.length ||
+        text[i + keyword.length] === " " ||
+        text[i + keyword.length] === ":";
+      if (before && match && after) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Parse an EXPAND line body (everything after "EXPAND ").
+ * Expected form: AS <model> FOR <prompt> [FOCUS <guidance>] INTO:
+ */
+function parseExpandBody(
+  body: string,
+  lineNum: number,
+): { model: string; prompt: string; focus: string | null } {
+  // Verify and strip trailing INTO:
+  const intoIdx = findUnquotedKeyword(body, "INTO:");
+  if (intoIdx === -1) {
+    throw new ParseError("EXPAND requires INTO: at the end", lineNum);
+  }
+  const beforeInto = body.slice(0, intoIdx).trim();
+
+  const asIdx = findUnquotedKeyword(beforeInto, "AS");
+  const forIdx = findUnquotedKeyword(beforeInto, "FOR");
+  const focusIdx = findUnquotedKeyword(beforeInto, "FOCUS");
+
+  if (asIdx === -1) {
+    throw new ParseError("EXPAND requires AS <model>", lineNum);
+  }
+  if (forIdx === -1) {
+    throw new ParseError("EXPAND requires FOR <prompt>", lineNum);
+  }
+  if (asIdx > forIdx) {
+    throw new ParseError("AS must come before FOR in EXPAND", lineNum);
+  }
+  if (focusIdx !== -1 && focusIdx < forIdx) {
+    throw new ParseError("FOCUS must come after FOR in EXPAND", lineNum);
+  }
+
+  const model = unquote(beforeInto.slice(asIdx + 3, forIdx).trim());
+  const prompt =
+    focusIdx !== -1
+      ? unquote(beforeInto.slice(forIdx + 4, focusIdx).trim())
+      : unquote(beforeInto.slice(forIdx + 4).trim());
+  const focus =
+    focusIdx !== -1
+      ? unquote(beforeInto.slice(focusIdx + 6).trim())
+      : null;
+
+  if (!model) {
+    throw new ParseError("EXPAND AS model cannot be empty", lineNum);
+  }
+  if (!prompt) {
+    throw new ParseError("EXPAND FOR prompt cannot be empty", lineNum);
+  }
+
+  return { model, prompt, focus };
+}
+
+/**
+ * Parse a level-2 INTO: block target line (RUN/EVAL with optional WITH, no prompt).
+ */
+function parseIntoTarget(
+  stripped: string,
+  lineNum: number,
+): { type: "RUN" | "RAW_RUN" | "EVAL" | "RAW_EVAL"; bin: string | null } {
+  for (const keyword of ["RAW_RUN", "RAW_EVAL", "RUN", "EVAL"] as const) {
+    if (stripped === keyword) {
+      return { type: keyword, bin: null };
+    }
+    if (stripped.startsWith(`${keyword} WITH `)) {
+      const bin = unquote(stripped.slice(`${keyword} WITH `.length).trim());
+      return { type: keyword, bin: bin || null };
+    }
+  }
+  throw new ParseError(
+    `Expected RUN, EVAL, or RETRY in INTO: block, got: ${stripped}`,
+    lineNum,
+  );
+}
+
+/**
  * Tokenize a .circuit file into a token stream.
  */
 export function tokenize(source: string): Token[] {
@@ -204,8 +302,59 @@ export function tokenize(source: string): Token[] {
       continue;
     }
 
-    // Indent level 1: RUN or EVAL (with optional WITH <bin>)
+    // Indent level 1: RUN, RAW_RUN, EVAL, RAW_EVAL, EXPAND (with optional WITH <bin>)
     if (level === 1) {
+      // EXPAND AS <model> FOR <prompt> [FOCUS <guidance>] INTO:
+      if (stripped.startsWith("EXPAND ")) {
+        const { model, prompt, focus } = parseExpandBody(
+          stripped.slice("EXPAND ".length).trim(),
+          line,
+        );
+        tokens.push({
+          type: "EXPAND",
+          value: prompt,
+          expandModel: model,
+          expandFocus: focus ?? undefined,
+          line,
+        });
+        continue;
+      }
+
+      // RAW_RUN <prompt> [WITH <bin>]
+      if (stripped.startsWith("RAW_RUN ")) {
+        const { prompt, bin } = parseWithClause(
+          stripped.slice("RAW_RUN ".length).trim(),
+        );
+        if (!prompt) {
+          throw new ParseError("RAW_RUN prompt cannot be empty", line);
+        }
+        tokens.push({
+          type: "RAW_RUN",
+          value: prompt,
+          secondaryValue: bin ?? undefined,
+          line,
+        });
+        continue;
+      }
+
+      // RAW_EVAL <prompt> [WITH <bin>]
+      if (stripped.startsWith("RAW_EVAL ")) {
+        const { prompt, bin } = parseWithClause(
+          stripped.slice("RAW_EVAL ".length).trim(),
+        );
+        if (!prompt) {
+          throw new ParseError("RAW_EVAL prompt cannot be empty", line);
+        }
+        tokens.push({
+          type: "RAW_EVAL",
+          value: prompt,
+          secondaryValue: bin ?? undefined,
+          line,
+        });
+        continue;
+      }
+
+      // RUN <prompt> [WITH <bin>]
       if (stripped.startsWith("RUN ")) {
         const { prompt, bin } = parseWithClause(
           stripped.slice("RUN ".length).trim(),
@@ -222,6 +371,7 @@ export function tokenize(source: string): Token[] {
         continue;
       }
 
+      // EVAL <prompt> [WITH <bin>]
       if (stripped.startsWith("EVAL ")) {
         const { prompt, bin } = parseWithClause(
           stripped.slice("EVAL ".length).trim(),
@@ -239,12 +389,12 @@ export function tokenize(source: string): Token[] {
       }
 
       throw new ParseError(
-        `Expected RUN or EVAL at indent level 1, got: ${stripped}`,
+        `Expected RUN, RAW_RUN, EVAL, RAW_EVAL, or EXPAND at indent level 1, got: ${stripped}`,
         line,
       );
     }
 
-    // Indent level 2: RETRY
+    // Indent level 2: RETRY, or INTO: block targets (RUN/EVAL with optional WITH)
     if (level === 2) {
       if (stripped.startsWith("RETRY ")) {
         const numStr = stripped.slice("RETRY ".length).trim();
@@ -259,10 +409,15 @@ export function tokenize(source: string): Token[] {
         continue;
       }
 
-      throw new ParseError(
-        `Expected RETRY at indent level 2, got: ${stripped}`,
+      // INTO: block targets — RUN/RAW_RUN/EVAL/RAW_EVAL [WITH <bin>] (no prompt)
+      const target = parseIntoTarget(stripped, line);
+      tokens.push({
+        type: target.type,
+        value: "", // no prompt — it lives on EXPAND's FOR
+        secondaryValue: target.bin ?? undefined,
         line,
-      );
+      });
+      continue;
     }
 
     throw new ParseError(`Unexpected indentation level ${level}`, line);

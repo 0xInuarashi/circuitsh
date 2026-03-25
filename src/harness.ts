@@ -92,33 +92,45 @@ export class Harness {
 
   /**
    * Expand a RUN prompt with full context.
+   * Optional model/focus override from EXPAND directive.
    */
   async expandRun(
     context: ExpansionContext,
+    opts?: { modelOverride?: string; focus?: string },
     onChunk?: (text: string) => void,
   ): Promise<ExpansionResult> {
     const userMessage = this.buildContextMessage(context);
+    const systemPrompt = opts?.focus
+      ? `${RUN_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe above focus directive reflects the circuit author's domain-specific priorities and constraints. Ensure your expanded prompt steers the agent toward these specific concerns. On retries, reinforce these priorities with increasing emphasis.`
+      : RUN_EXPANSION_SYSTEM;
     return this.expand(
-      RUN_EXPANSION_SYSTEM,
+      systemPrompt,
       userMessage,
       TEMP_RUN_EXPANSION,
       onChunk,
+      opts?.modelOverride,
     );
   }
 
   /**
    * Expand an EVAL prompt with full context.
+   * Optional model/focus override from EXPAND directive.
    */
   async expandEval(
     context: ExpansionContext,
+    opts?: { modelOverride?: string; focus?: string },
     onChunk?: (text: string) => void,
   ): Promise<ExpansionResult> {
     const userMessage = this.buildContextMessage(context);
+    const systemPrompt = opts?.focus
+      ? `${EVAL_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe above focus directive reflects the circuit author's domain-specific evaluation priorities. Ensure your expanded evaluation prompt tests for these specific concerns. Be strict about these criteria.`
+      : EVAL_EXPANSION_SYSTEM;
     return this.expand(
-      EVAL_EXPANSION_SYSTEM,
+      systemPrompt,
       userMessage,
       TEMP_EVAL_EXPANSION,
       onChunk,
+      opts?.modelOverride,
     );
   }
 
@@ -141,10 +153,12 @@ export class Harness {
     userMessage: string,
     temperature: number,
     onChunk?: (text: string) => void,
+    modelOverride?: string,
   ): Promise<ExpansionResult> {
+    const model = modelOverride ?? this.model;
     // First attempt
     const response = await this.streamComplete(
-      this.model,
+      model,
       [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },
@@ -165,7 +179,7 @@ export class Harness {
 
     // Format retry
     const retryResponse = await this.streamComplete(
-      this.model,
+      model,
       [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },

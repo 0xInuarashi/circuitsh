@@ -1,5 +1,10 @@
 // ── AST Types ──
 
+export type ExpansionMode =
+  | "auto"                                     // plain RUN/EVAL — default harness expansion
+  | "raw"                                      // RAW_RUN/RAW_EVAL — no expansion
+  | { model: string; focus?: string };         // EXPAND — custom model/focus
+
 export interface Define {
   key: string;
   value: string;
@@ -9,6 +14,7 @@ export interface Define {
 export interface RunStep {
   prompt: string;
   bin?: string; // from WITH clause
+  expansion: ExpansionMode;
   line: number;
 }
 
@@ -16,6 +22,7 @@ export interface EvalStep {
   prompt: string;
   retry: number;
   bin?: string; // from WITH clause
+  expansion: ExpansionMode;
   line: number;
 }
 
@@ -49,7 +56,10 @@ export type TokenType =
   | "ALIAS"
   | "CIRCUIT_DECL"
   | "RUN"
+  | "RAW_RUN"
   | "EVAL"
+  | "RAW_EVAL"
+  | "EXPAND"
   | "RETRY"
   | "COMMENT"
   | "BLANK";
@@ -58,6 +68,8 @@ export interface Token {
   type: TokenType;
   value: string;
   secondaryValue?: string; // for DEFINE: key in value, directive value in secondaryValue
+  expandModel?: string;    // EXPAND: AS model
+  expandFocus?: string;    // EXPAND: FOCUS guidance
   line: number;
 }
 

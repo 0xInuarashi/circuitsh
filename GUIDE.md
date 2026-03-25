@@ -134,6 +134,93 @@ CIRCUIT mixed:
     RETRY 5
 ```
 
+### RAW_RUN / RAW_EVAL
+
+Skip prompt expansion entirely — pass the prompt verbatim to the bin:
+
+```circuit
+  RAW_RUN "exact command, no expansion" WITH claude
+  RAW_EVAL "exact eval, no expansion" WITH verify
+    RETRY 3
+```
+
+Useful for steps that call scripts or tools where the prompt engineer's expansion would be counterproductive.
+
+### EXPAND
+
+Take full control over prompt expansion with a custom model and optional domain focus:
+
+```circuit
+  EXPAND AS <model> FOR <prompt> [FOCUS <guidance>] INTO:
+    RUN [WITH <bin>]
+```
+
+- **AS** — the model to use for expansion (overrides `PROMPT_ENGINEER_MODEL`)
+- **FOR** — the prompt to expand
+- **FOCUS** — optional domain-specific guidance injected into the expansion system prompt
+- **INTO:** — opens a block containing the target RUN or EVAL
+
+EXPAND works for both RUN and EVAL:
+
+```circuit
+  EXPAND AS "anthropic/claude-sonnet-4-6" \
+    FOR "build the indexer" \
+    FOCUS "optimize for write throughput, use memory-mapped files" \
+    INTO:
+    RUN WITH claude
+  EXPAND AS "anthropic/claude-sonnet-4-6" \
+    FOR "verify the indexer" \
+    FOCUS "test with 1M documents, verify crash recovery" \
+    INTO:
+    EVAL WITH bench
+    RETRY 8
+```
+
+FOCUS is optional — EXPAND without FOCUS just overrides the expansion model:
+
+```circuit
+  EXPAND AS "deepseek/deepseek-r1" FOR "build the query engine" INTO:
+    RUN WITH claude
+```
+
+### Expansion Modes
+
+Each step has one of three expansion modes:
+
+| Mode | Syntax | Behavior |
+|---|---|---|
+| **auto** | `RUN` / `EVAL` | Default harness expansion via `PROMPT_ENGINEER_MODEL` |
+| **raw** | `RAW_RUN` / `RAW_EVAL` | No expansion — prompt sent verbatim |
+| **custom** | `EXPAND ... INTO:` | Custom model and optional FOCUS |
+
+### FOCUS
+
+FOCUS injects domain-specific priorities into the expansion system prompt as a structurally separate section. Unlike appending to the prompt, FOCUS:
+
+- Sits at the system prompt level — won't get drowned out by iteration context
+- Persists across retries with consistent authority
+- Steers the expansion model's judgment, not just the content
+
+```circuit
+  EXPAND AS "anthropic/claude-sonnet-4-6" \
+    FOR "optimize the compression algorithm" \
+    FOCUS "target throughput over ratio, profile before changing, \
+      use SIMD intrinsics where available, benchmark against zstd" \
+    INTO:
+    RUN WITH claude
+```
+
+FOCUS requires EXPAND. EXPAND does not require FOCUS.
+
+### Linter Checks
+
+The parser catches these errors at parse time:
+
+- `EXPAND INTO: RAW_RUN` / `EXPAND INTO: RAW_EVAL` — contradictory (EXPAND already handles expansion)
+- `RETRY` with no preceding `EVAL` at the same indent level
+- `EXPAND` without `AS`, `FOR`, or `INTO:`
+- `EVAL` without a preceding `RUN`
+
 ### RUN without EVAL
 
 A RUN with no following EVAL is fire-and-forget — it executes once with no evaluation. Useful for setup:

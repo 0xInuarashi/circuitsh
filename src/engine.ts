@@ -377,25 +377,45 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     : cliOptions.verbose ? "verbose" as const
     : null;
 
-  // ── Expand RUN prompt (or reuse cache) ──
+  // ── Expand RUN prompt (or skip for raw) ──
   let runExpansion: import("./types.ts").ExpansionResult;
-  if (state.cachedRunExpansion) {
+  const runExpMode = step.run.expansion;
+
+  if (runExpMode === "raw") {
+    // RAW_RUN — no expansion, pass prompt directly
+    runExpansion = {
+      expandedPrompt: step.run.prompt,
+      engineerScratchpadUpdates: {},
+      rawResponse: "",
+    };
+    console.log(`  ${c.dim}RAW_RUN — skipping expansion (${step.run.prompt.length} chars)${c.reset}`);
+  } else if (state.cachedRunExpansion) {
     runExpansion = state.cachedRunExpansion;
     state.cachedRunExpansion = null;
     console.log(`  ${c.dim}Reusing cached RUN expansion (${runExpansion.expandedPrompt.length} chars)${c.reset}`);
   } else {
+    // auto or custom expansion
+    const expandOpts = typeof runExpMode === "object"
+      ? { modelOverride: runExpMode.model, focus: runExpMode.focus }
+      : undefined;
+    const expandModel = expandOpts?.modelOverride ?? config.promptEngineerModel;
+
     if (isDebug) {
       console.log(`\n  ${c.magenta}┌─ USER PROMPT (RUN) ──${c.reset}`);
       console.log(`  ${c.magenta}│${c.reset} ${step.run.prompt}`);
+      if (expandOpts?.focus) {
+        console.log(`  ${c.magenta}│${c.reset} ${c.dim}FOCUS: ${expandOpts.focus.slice(0, 200)}${c.reset}`);
+      }
       console.log(`  ${c.magenta}└──${c.reset}`);
     }
-    console.log(`  ${c.dim}Expanding RUN prompt via ${config.promptEngineerModel}...${c.reset}`);
+    console.log(`  ${c.dim}Expanding RUN prompt via ${expandModel}...${c.reset}`);
     if (isDebug) {
       process.stdout.write(`\n  ${c.blue}┌─ EXPANDED PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
     }
     runExpansion = await harness.expandRun(
       runContext,
-      isDebug ? (chunk) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+      expandOpts,
+      isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
     );
 
     if (isDebug) {
@@ -513,25 +533,45 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     executionHistory: state.iterations,
   };
 
-  // ── Expand EVAL prompt (or reuse cache) ──
+  // ── Expand EVAL prompt (or skip for raw) ──
   let evalExpansion: import("./types.ts").ExpansionResult;
-  if (state.cachedEvalExpansion) {
+  const evalExpMode = step.eval.expansion;
+
+  if (evalExpMode === "raw") {
+    // RAW_EVAL — no expansion, pass prompt directly
+    evalExpansion = {
+      expandedPrompt: step.eval.prompt,
+      engineerScratchpadUpdates: {},
+      rawResponse: "",
+    };
+    console.log(`  ${c.dim}RAW_EVAL — skipping expansion (${step.eval.prompt.length} chars)${c.reset}`);
+  } else if (state.cachedEvalExpansion) {
     evalExpansion = state.cachedEvalExpansion;
     state.cachedEvalExpansion = null;
     console.log(`  ${c.dim}Reusing cached EVAL expansion (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
   } else {
+    // auto or custom expansion
+    const expandOpts = typeof evalExpMode === "object"
+      ? { modelOverride: evalExpMode.model, focus: evalExpMode.focus }
+      : undefined;
+    const expandModel = expandOpts?.modelOverride ?? config.promptEngineerModel;
+
     if (isDebug) {
       console.log(`\n  ${c.magenta}┌─ USER PROMPT (EVAL) ──${c.reset}`);
       console.log(`  ${c.magenta}│${c.reset} ${step.eval.prompt}`);
+      if (expandOpts?.focus) {
+        console.log(`  ${c.magenta}│${c.reset} ${c.dim}FOCUS: ${expandOpts.focus.slice(0, 200)}${c.reset}`);
+      }
       console.log(`  ${c.magenta}└──${c.reset}`);
     }
-    console.log(`  ${c.dim}Expanding EVAL prompt via ${config.promptEngineerModel}...${c.reset}`);
+    console.log(`  ${c.dim}Expanding EVAL prompt via ${expandModel}...${c.reset}`);
     if (isDebug) {
       process.stdout.write(`\n  ${c.blue}┌─ EXPANDED EVAL PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
     }
     evalExpansion = await harness.expandEval(
       evalContext,
-      isDebug ? (chunk) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+      expandOpts,
+      isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
     );
 
     if (isDebug) {
