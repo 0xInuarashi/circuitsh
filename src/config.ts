@@ -39,6 +39,21 @@ export function resolveConfig(
   if (cliOptions.apiKey) config.apiKey = cliOptions.apiKey;
   if (cliOptions.logDir) config.logDir = cliOptions.logDir;
 
+  // Build aliases map
+  const aliases: Record<string, string> = {};
+  for (const alias of ast.aliases) {
+    aliases[alias.name] = alias.command;
+  }
+  config.aliases = aliases;
+
+  // Resolve RUN_BIN / EVAL_BIN through aliases
+  if (typeof config.runBin === "string" && aliases[config.runBin]) {
+    config.runBin = aliases[config.runBin];
+  }
+  if (typeof config.evalBin === "string" && aliases[config.evalBin as string]) {
+    config.evalBin = aliases[config.evalBin as string]!;
+  }
+
   // EVAL_BIN defaults to RUN_BIN if not set
   if (!config.evalBin && config.runBin) {
     config.evalBin = config.runBin;

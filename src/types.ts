@@ -8,12 +8,14 @@ export interface Define {
 
 export interface RunStep {
   prompt: string;
+  bin?: string; // from WITH clause
   line: number;
 }
 
 export interface EvalStep {
   prompt: string;
   retry: number;
+  bin?: string; // from WITH clause
   line: number;
 }
 
@@ -28,8 +30,15 @@ export interface CircuitBlock {
   line: number;
 }
 
+export interface Alias {
+  name: string;
+  command: string;
+  line: number;
+}
+
 export interface CircuitAST {
   defines: Define[];
+  aliases: Alias[];
   circuits: CircuitBlock[];
 }
 
@@ -37,6 +46,7 @@ export interface CircuitAST {
 
 export type TokenType =
   | "DEFINE"
+  | "ALIAS"
   | "CIRCUIT_DECL"
   | "RUN"
   | "EVAL"
@@ -64,6 +74,7 @@ export interface CircuitConfig {
   logDir: string;
   checkpoint: boolean;
   timeout: number;
+  aliases: Record<string, string>;
 }
 
 export const CONFIG_DEFAULTS: Partial<CircuitConfig> = {

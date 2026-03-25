@@ -44,6 +44,7 @@ Top-level key-value pairs that configure the circuit runtime.
 | `PROMPT_ENGINEER_MODEL` | No | `anthropic/claude-sonnet-4-6` | Model that expands your prompts into rich context |
 | `RUN_BIN` | Yes | — | Command to execute tasks (e.g., `claude`, `aider`) |
 | `EVAL_BIN` | No | same as `RUN_BIN` | Command to evaluate tasks |
+| `ALIAS` | No | — | Named alias for a bin command (see [Aliases](#aliases)) |
 | `DIR` | No | `.` | Working directory (created if it doesn't exist) |
 | `LOG_DIR` | No | `.circuit-runs/` | Where JSONL run logs are saved |
 | `CHECKPOINT` | No | `off` | Git snapshot before each iteration (`on`/`off`) |
@@ -51,20 +52,41 @@ Top-level key-value pairs that configure the circuit runtime.
 
 Config priority: **CLI flags > .circuit defines > environment variables > defaults**
 
+## Aliases
+
+Define named aliases for bin commands to keep circuit bodies readable:
+
+```circuit
+ALIAS claude "claude --dangerously-skip-permissions"
+ALIAS aider "aider --model sonnet"
+ALIAS bench "./bench.sh"
+```
+
+Aliases can be referenced in `RUN_BIN`, `EVAL_BIN`, and `WITH` clauses. If the value matches an alias name, the alias command is used; otherwise the value is treated as a literal command.
+
+```circuit
+ALIAS claude "claude --dangerously-skip-permissions"
+RUN_BIN claude          # resolves to "claude --dangerously-skip-permissions"
+EVAL_BIN claude         # same
+```
+
 ## Step Directives
 
 ### RUN
 
 ```circuit
   RUN <prompt>
+  RUN <prompt> WITH <bin>
 ```
 
-Executes a task. The prompt is a terse, human-written description — the runtime's prompt engineer model expands it into a rich, context-aware prompt before sending it to `RUN_BIN`.
+Executes a task. The prompt is a terse, human-written description — the runtime's prompt engineer model expands it into a rich, context-aware prompt before sending it to `RUN_BIN` (or the bin specified by `WITH`).
 
 ### EVAL
 
 ```circuit
   EVAL <prompt>
+    RETRY <N>
+  EVAL <prompt> WITH <bin>
     RETRY <N>
 ```
 
@@ -84,6 +106,33 @@ If no `<verdict>` tag is found, it defaults to FAILURE (safe default). The entir
 ```
 
 Max retries for the RUN/EVAL pair. Total attempts = RETRY + 1. Default is 3 if omitted. Nested under EVAL.
+
+### WITH
+
+Override the bin for a specific step:
+
+```circuit
+  RUN "implement feature" WITH claude
+  EVAL "run benchmarks" WITH bench
+    RETRY 5
+```
+
+The `WITH` value is resolved against aliases first — if it matches an alias name, the alias command is used. Otherwise it's treated as a literal command.
+
+Resolution order: **WITH clause > RUN_BIN/EVAL_BIN default > hardcoded default**
+
+```circuit
+ALIAS claude "claude --dangerously-skip-permissions"
+ALIAS aider "aider --model sonnet"
+ALIAS eval_script "./eval.sh"
+RUN_BIN claude
+
+CIRCUIT mixed:
+  RUN "scaffold the project"                # uses RUN_BIN (claude alias)
+  RUN "optimize hot path" WITH aider        # uses aider alias
+  EVAL "benchmark it" WITH eval_script      # uses eval_script alias
+    RETRY 5
+```
 
 ### RUN without EVAL
 

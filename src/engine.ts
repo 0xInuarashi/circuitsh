@@ -60,8 +60,6 @@ export async function executeCircuit(
     : null;
   const client = new OpenRouterClient(config.apiKey, config.apiUrl, rawLogger);
   const harness = new Harness(client, config.promptEngineerModel);
-  const runAdapter = detectAdapter(config.runBin);
-  const evalAdapter = detectAdapter(config.evalBin);
   const env = getEnvironment(config);
 
   // Ensure working directory exists
@@ -96,6 +94,14 @@ export async function executeCircuit(
     console.log(`\n${c.cyan}${"─".repeat(60)}${c.reset}`);
     console.log(`${c.bold}${c.cyan}Step ${stepIndex + 1}/${circuit.steps.length}${c.reset} ${c.dim}│${c.reset} ${c.white}RUN${c.reset}`);
     console.log(`${c.cyan}${"─".repeat(60)}${c.reset}`);
+
+    // Resolve per-step bins: WITH > default
+    const stepRunBin = resolveBin(step.run.bin ?? config.runBin, config.aliases);
+    const stepEvalBin = step.eval
+      ? resolveBin(step.eval.bin ?? config.evalBin, config.aliases)
+      : config.evalBin;
+    const runAdapter = detectAdapter(stepRunBin);
+    const evalAdapter = detectAdapter(stepEvalBin);
 
     const state: StepState = {
       stepIndex,
@@ -138,6 +144,8 @@ export async function executeCircuit(
           isFirst,
           completedStepSummaries,
           cliOptions,
+          stepRunBin,
+          stepEvalBin,
         });
 
         state.iterations.push(iterResult);
@@ -195,7 +203,7 @@ export async function executeCircuit(
           console.log(`  ${c.dim}Consulting prompt engineer...${c.reset}`);
 
           const diagnosis = await diagnoseTimeout(client, config.promptEngineerModel, {
-            binCommand: config.runBin,
+            binCommand: stepRunBin,
             timeoutMs: err.timeoutMs,
             partialStdout: err.partialStdout,
             partialStderr: err.partialStderr,
@@ -292,6 +300,8 @@ interface RunIterationOpts {
   isFirst: boolean;
   completedStepSummaries: string[];
   cliOptions: CLIOptions;
+  stepRunBin: string;
+  stepEvalBin: string;
 }
 
 async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
@@ -309,6 +319,8 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     isFirst,
     completedStepSummaries,
     cliOptions,
+    stepRunBin,
+    stepEvalBin,
   } = opts;
 
   const iterStart = Date.now();
@@ -405,7 +417,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   // ── Execute RUN_BIN ──
   const runIsNewSession = !state.runSessionCreated;
   const runCommand = runAdapter.buildCommand(
-    config.runBin,
+    stepRunBin,
     runExpansion.expandedPrompt,
     state.runSessionId,
     runIsNewSession,
@@ -420,10 +432,10 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     console.log(`  ${c.gray}└──${c.reset}`);
   }
 
-  console.log(`  ${c.cyan}Running ${config.runBin.split(" ")[0]}...${c.reset}`);
+  console.log(`  ${c.cyan}Running ${stepRunBin.split(" ")[0]}...${c.reset}`);
   const runOutput = await runBin({
     adapter: runAdapter,
-    binCommand: config.runBin,
+    binCommand: stepRunBin,
     prompt: runExpansion.expandedPrompt,
     sessionId: state.runSessionId,
     isFirst: runIsNewSession,
@@ -540,7 +552,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   // ── Execute EVAL_BIN ──
   const evalIsNewSession = !state.evalSessionCreated;
   const evalCommand = evalAdapter.buildCommand(
-    config.evalBin,
+    stepEvalBin,
     evalExpansion.expandedPrompt,
     state.evalSessionId,
     evalIsNewSession,
@@ -558,7 +570,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   console.log(`  ${c.cyan}Running EVAL...${c.reset}`);
   const evalOutput = await runBin({
     adapter: evalAdapter,
-    binCommand: config.evalBin,
+    binCommand: stepEvalBin,
     prompt: evalExpansion.expandedPrompt,
     sessionId: state.evalSessionId,
     isFirst: evalIsNewSession,
@@ -708,6 +720,14 @@ function rawLog(label: string, data: string): void {
   console.log(`\n${c.gray}┌── RAW: ${label} ──${c.reset}`);
   console.log(`${c.gray}${data}${c.reset}`);
   console.log(`${c.gray}└── END: ${label} ──${c.reset}\n`);
+}
+
+/**
+ * Resolve a bin reference through aliases.
+ * If the value matches an alias name, return the alias command; otherwise return as-is.
+ */
+function resolveBin(bin: string, aliases: Record<string, string>): string {
+  return aliases[bin] ?? bin;
 }
 
 function sleep(ms: number): Promise<void> {

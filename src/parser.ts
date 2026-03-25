@@ -1,4 +1,5 @@
 import type {
+  Alias,
   CircuitAST,
   CircuitBlock,
   Define,
@@ -15,17 +16,28 @@ import { tokenize } from "./lexer.ts";
  */
 export function parse(source: string): CircuitAST {
   const tokens = tokenize(source);
-  const ast: CircuitAST = { defines: [], circuits: [] };
+  const ast: CircuitAST = { defines: [], aliases: [], circuits: [] };
   let i = 0;
 
-  // Parse defines (all DEFINE tokens before first CIRCUIT_DECL)
-  while (i < tokens.length && tokens[i]!.type === "DEFINE") {
+  // Parse defines and aliases (all DEFINE/ALIAS tokens before first CIRCUIT_DECL)
+  while (
+    i < tokens.length &&
+    (tokens[i]!.type === "DEFINE" || tokens[i]!.type === "ALIAS")
+  ) {
     const tok = tokens[i]!;
-    ast.defines.push({
-      key: tok.value,
-      value: tok.secondaryValue ?? "",
-      line: tok.line,
-    });
+    if (tok.type === "ALIAS") {
+      ast.aliases.push({
+        name: tok.value,
+        command: tok.secondaryValue ?? "",
+        line: tok.line,
+      });
+    } else {
+      ast.defines.push({
+        key: tok.value,
+        value: tok.secondaryValue ?? "",
+        line: tok.line,
+      });
+    }
     i++;
   }
 
@@ -56,7 +68,11 @@ export function parse(source: string): CircuitAST {
       }
 
       const runTok = tokens[i]!;
-      const run: RunStep = { prompt: runTok.value, line: runTok.line };
+      const run: RunStep = {
+        prompt: runTok.value,
+        ...(runTok.secondaryValue ? { bin: runTok.secondaryValue } : {}),
+        line: runTok.line,
+      };
       i++;
 
       // Check if next token is EVAL
@@ -72,7 +88,12 @@ export function parse(source: string): CircuitAST {
           i++;
         }
 
-        evalStep = { prompt: evalTok.value, retry, line: evalTok.line };
+        evalStep = {
+          prompt: evalTok.value,
+          retry,
+          ...(evalTok.secondaryValue ? { bin: evalTok.secondaryValue } : {}),
+          line: evalTok.line,
+        };
       }
 
       circuit.steps.push({ run, eval: evalStep });

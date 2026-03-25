@@ -106,6 +106,20 @@ function joinContinuations(
 }
 
 /**
+ * Split a RUN/EVAL body on the last ` WITH ` (case-sensitive).
+ * Returns the prompt (unquoted) and optional bin name.
+ */
+function parseWithClause(body: string): { prompt: string; bin: string | null } {
+  const idx = body.lastIndexOf(" WITH ");
+  if (idx === -1) {
+    return { prompt: unquote(body), bin: null };
+  }
+  const prompt = unquote(body.slice(0, idx).trim());
+  const bin = unquote(body.slice(idx + " WITH ".length).trim());
+  return { prompt, bin: bin || null };
+}
+
+/**
  * Tokenize a .circuit file into a token stream.
  */
 export function tokenize(source: string): Token[] {
@@ -131,7 +145,7 @@ export function tokenize(source: string): Token[] {
 
     if (stripped === "") continue;
 
-    // Indent level 0: DEFINE or CIRCUIT_DECL
+    // Indent level 0: DEFINE, ALIAS, or CIRCUIT_DECL
     if (level === 0) {
       // CIRCUIT declaration
       if (stripped.startsWith("CIRCUIT ") && stripped.endsWith(":")) {
@@ -140,6 +154,27 @@ export function tokenize(source: string): Token[] {
           throw new ParseError("CIRCUIT name cannot be empty", line);
         }
         tokens.push({ type: "CIRCUIT_DECL", value: name, line });
+        continue;
+      }
+
+      // ALIAS directive: ALIAS <name> <command>
+      if (stripped.startsWith("ALIAS ")) {
+        const rest = stripped.slice("ALIAS ".length).trim();
+        const spaceIdx = rest.indexOf(" ");
+        if (spaceIdx === -1) {
+          throw new ParseError("ALIAS requires a name and a command", line);
+        }
+        const name = rest.slice(0, spaceIdx);
+        const command = unquote(rest.slice(spaceIdx + 1).trim());
+        if (!command) {
+          throw new ParseError("ALIAS command cannot be empty", line);
+        }
+        tokens.push({
+          type: "ALIAS",
+          value: name,
+          secondaryValue: command,
+          line,
+        });
         continue;
       }
 
@@ -169,23 +204,37 @@ export function tokenize(source: string): Token[] {
       continue;
     }
 
-    // Indent level 1: RUN or EVAL
+    // Indent level 1: RUN or EVAL (with optional WITH <bin>)
     if (level === 1) {
       if (stripped.startsWith("RUN ")) {
-        const prompt = unquote(stripped.slice("RUN ".length).trim());
+        const { prompt, bin } = parseWithClause(
+          stripped.slice("RUN ".length).trim(),
+        );
         if (!prompt) {
           throw new ParseError("RUN prompt cannot be empty", line);
         }
-        tokens.push({ type: "RUN", value: prompt, line });
+        tokens.push({
+          type: "RUN",
+          value: prompt,
+          secondaryValue: bin ?? undefined,
+          line,
+        });
         continue;
       }
 
       if (stripped.startsWith("EVAL ")) {
-        const prompt = unquote(stripped.slice("EVAL ".length).trim());
+        const { prompt, bin } = parseWithClause(
+          stripped.slice("EVAL ".length).trim(),
+        );
         if (!prompt) {
           throw new ParseError("EVAL prompt cannot be empty", line);
         }
-        tokens.push({ type: "EVAL", value: prompt, line });
+        tokens.push({
+          type: "EVAL",
+          value: prompt,
+          secondaryValue: bin ?? undefined,
+          line,
+        });
         continue;
       }
 
