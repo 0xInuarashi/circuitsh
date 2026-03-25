@@ -259,10 +259,14 @@ export class Harness {
       sections.push(`EVAL HISTORY:\n${context.evalHistory}`);
     }
 
-    // Scratchpad (BIN's)
+    // Scratchpad (BIN's) — label circuit_context entries distinctly
     if (Object.keys(context.scratchpad).length > 0) {
       const entries = Object.entries(context.scratchpad)
-        .map(([k, v]) => `  ${k}: ${v}`)
+        .map(([k, v]) =>
+          k.startsWith("circuit_context_")
+            ? `  [circuit_context] ${v}`
+            : `  ${k}: ${v}`,
+        )
         .join("\n");
       sections.push(`AGENT SCRATCHPAD:\n${entries}`);
     }

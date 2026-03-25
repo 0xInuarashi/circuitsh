@@ -52,6 +52,7 @@ export interface Alias {
 export interface CircuitAST {
   defines: Define[];
   aliases: Alias[];
+  circuitContext: string[];
   circuits: CircuitBlock[];
 }
 
@@ -60,6 +61,7 @@ export interface CircuitAST {
 export type TokenType =
   | "DEFINE"
   | "ALIAS"
+  | "CIRCUIT_CONTEXT"
   | "CIRCUIT_DECL"
   | "RUN"
   | "RAW_RUN"
@@ -268,6 +270,7 @@ export interface CLIOptions {
   step?: number;
   resume?: string;
   debug: boolean;
+  contextCheck: boolean;
 }
 
 // ── JSONL Event Types ──

@@ -276,6 +276,16 @@ export function tokenize(source: string): Token[] {
         continue;
       }
 
+      // CIRCUIT_CONTEXT "freeform string"
+      if (stripped.startsWith("CIRCUIT_CONTEXT ")) {
+        const value = unquote(stripped.slice("CIRCUIT_CONTEXT ".length).trim());
+        if (!value) {
+          throw new ParseError("CIRCUIT_CONTEXT value cannot be empty", line);
+        }
+        tokens.push({ type: "CIRCUIT_CONTEXT", value, line });
+        continue;
+      }
+
       // DEFINE directive
       const spaceIdx = stripped.indexOf(" ");
       if (spaceIdx === -1) {

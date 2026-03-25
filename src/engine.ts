@@ -108,6 +108,14 @@ export async function executeCircuit(
     const runAdapter = detectAdapter(stepRunBin);
     const evalAdapter = detectAdapter(stepEvalBin);
 
+    // Seed scratchpad with CIRCUIT_CONTEXT entries
+    const initialScratchpad: Record<string, string> = {};
+    if (ast.circuitContext.length > 0) {
+      for (let ci = 0; ci < ast.circuitContext.length; ci++) {
+        initialScratchpad[`circuit_context_${ci + 1}`] = ast.circuitContext[ci]!;
+      }
+    }
+
     const state: StepState = {
       stepIndex,
       run: step.run,
@@ -116,7 +124,7 @@ export async function executeCircuit(
       evalSessionId: crypto.randomUUID(),
       runSessionCreated: false,
       evalSessionCreated: false,
-      scratchpad: {},
+      scratchpad: initialScratchpad,
       engineerScratchpad: {},
       iterations: [],
       success: false,

@@ -16,6 +16,9 @@ DIR ~/parameter-golf
 CHECKPOINT on
 TIMEOUT 900
 
+CIRCUIT_CONTEXT "runpod API key is ${RUNPOD_API_KEY}"
+
+
 CIRCUIT Parameter Golf:
   # Step 1: Clone repo and deep-study winning submissions
   RUN Clone https://github.com/openai/parameter-golf. \
@@ -34,7 +37,7 @@ CIRCUIT Parameter Golf:
     --variant sp1024 --train-shards 80. Verify all 8 GPUs are visible.
     ALLOW_REQUEST "a RunPod API key is required"
     ALLOW_REQUEST "SSH credentials or key are needed for the pod"
-    ALLOW_REQUEST "compute budget approval is needed"
+    # ALLOW_REQUEST "compute budget approval is needed"
     NOTIFY ./notify.sh
     REQUEST_TIMEOUT 600
   EVAL SSH into the RunPod instance and verify: \
@@ -87,9 +90,9 @@ CIRCUIT Parameter Golf:
   EVAL Run 3 training runs with different seeds (42, 1337, 2025) on RunPod. \
     Report all 3 val_bpb scores and the average. \
     Is the average competitive with top leaderboard (below 1.12)?
-    ALLOW_REQUEST "additional compute budget approval needed"
-    NOTIFY ./notify.sh
-    REQUEST_TIMEOUT 600
+    # ALLOW_REQUEST "additional compute budget approval needed"
+    # NOTIFY ./notify.sh
+    # REQUEST_TIMEOUT 600
     RETRY 5
 
   # Step 7: Prepare and submit

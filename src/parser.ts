@@ -23,14 +23,12 @@ const EVAL_STARTERS = new Set(["EVAL", "RAW_EVAL"]);
  */
 export function parse(source: string): CircuitAST {
   const tokens = tokenize(source);
-  const ast: CircuitAST = { defines: [], aliases: [], circuits: [] };
+  const ast: CircuitAST = { defines: [], aliases: [], circuitContext: [], circuits: [] };
   let i = 0;
 
-  // Parse defines and aliases (all DEFINE/ALIAS tokens before first CIRCUIT_DECL)
-  while (
-    i < tokens.length &&
-    (tokens[i]!.type === "DEFINE" || tokens[i]!.type === "ALIAS")
-  ) {
+  // Parse header: defines, aliases, circuit context (before first CIRCUIT_DECL)
+  const HEADER_TYPES = new Set(["DEFINE", "ALIAS", "CIRCUIT_CONTEXT"]);
+  while (i < tokens.length && HEADER_TYPES.has(tokens[i]!.type)) {
     const tok = tokens[i]!;
     if (tok.type === "ALIAS") {
       ast.aliases.push({
@@ -38,6 +36,8 @@ export function parse(source: string): CircuitAST {
         command: tok.secondaryValue ?? "",
         line: tok.line,
       });
+    } else if (tok.type === "CIRCUIT_CONTEXT") {
+      ast.circuitContext.push(tok.value);
     } else {
       ast.defines.push({
         key: tok.value,

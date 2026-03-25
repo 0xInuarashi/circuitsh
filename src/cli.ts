@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { parse } from "./parser.ts";
 import { resolveConfig } from "./config.ts";
 import { executeCircuit } from "./engine.ts";
+import { contextCheck } from "./context-check.ts";
 import { CircuitError, ParseError, ConfigError, BinNotFoundError } from "./errors.ts";
 import type { CLIOptions } from "./types.ts";
 
@@ -24,6 +25,7 @@ program
   .option("--resume <runId>", "Resume from JSONL log")
   .option("--raw", "Dump all raw API request/response bodies, BIN commands, and traces", false)
   .option("--debug", "Show full tracebacks and raw responses", false)
+  .option("--context-check", "Analyze CIRCUIT_CONTEXT vs ALLOW_REQUEST for gaps", false)
   .action(async (file: string, options: CLIOptions) => {
     try {
       // Read and parse .circuit file
@@ -66,6 +68,12 @@ program
         console.log("\nResolved config:");
         console.log(JSON.stringify({ ...config, apiKey: "***" }, null, 2));
         console.log("\nDry run complete — no execution.");
+        process.exit(0);
+      }
+
+      // Context check: analyze gaps between CIRCUIT_CONTEXT and ALLOW_REQUEST
+      if (options.contextCheck) {
+        await contextCheck(ast, config);
         process.exit(0);
       }
 
