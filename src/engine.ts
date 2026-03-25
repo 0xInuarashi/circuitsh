@@ -1,4 +1,5 @@
-import { execSync } from "child_process";
+import { execSync, spawn as spawnProcess } from "child_process";
+import { createInterface } from "readline";
 import { existsSync, mkdirSync } from "fs";
 import { platform, release } from "os";
 import type {
@@ -7,6 +8,7 @@ import type {
   CLIOptions,
   EnvironmentInfo,
   ExpansionContext,
+  ExpansionResult,
   IterationResult,
   StepState,
 } from "./types.ts";
@@ -14,7 +16,7 @@ import { OpenRouterClient } from "./client.ts";
 import { Harness, diagnoseTimeout } from "./harness.ts";
 import { detectAdapter } from "./session.ts";
 import { runBin } from "./runner.ts";
-import { parseVerdict, parseScratchpadUpdates } from "./verdict.ts";
+import { parseVerdict, parseScratchpadUpdates, parseRequestInput } from "./verdict.ts";
 import {
   logCircuitStart,
   logCircuitEnd,
@@ -368,6 +370,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
         : null,
     evalHistory: null,
     executionHistory: state.iterations,
+    allowRequests: step.run.allowRequests,
   };
 
   const isDebug = cliOptions.debug || cliOptions.raw;
@@ -378,7 +381,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     : null;
 
   // ── Expand RUN prompt (or skip for raw) ──
-  let runExpansion: import("./types.ts").ExpansionResult;
+  let runExpansion: ExpansionResult;
   const runExpMode = step.run.expansion;
 
   if (runExpMode === "raw") {
@@ -394,38 +397,21 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     state.cachedRunExpansion = null;
     console.log(`  ${c.dim}Reusing cached RUN expansion (${runExpansion.expandedPrompt.length} chars)${c.reset}`);
   } else {
-    // auto or custom expansion
-    const expandOpts = typeof runExpMode === "object"
-      ? { modelOverride: runExpMode.model, focus: runExpMode.focus }
-      : undefined;
-    const expandModel = expandOpts?.modelOverride ?? config.promptEngineerModel;
-
-    if (isDebug) {
-      console.log(`\n  ${c.magenta}┌─ USER PROMPT (RUN) ──${c.reset}`);
-      console.log(`  ${c.magenta}│${c.reset} ${step.run.prompt}`);
-      if (expandOpts?.focus) {
-        console.log(`  ${c.magenta}│${c.reset} ${c.dim}FOCUS: ${expandOpts.focus.slice(0, 200)}${c.reset}`);
-      }
-      console.log(`  ${c.magenta}└──${c.reset}`);
-    }
-    console.log(`  ${c.dim}Expanding RUN prompt via ${expandModel}...${c.reset}`);
-    if (isDebug) {
-      process.stdout.write(`\n  ${c.blue}┌─ EXPANDED PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
-    }
-    runExpansion = await harness.expandRun(
+    // auto or custom expansion — may loop if request_input is triggered
+    runExpansion = await expandWithRequestLoop(
+      harness,
+      "run",
       runContext,
-      expandOpts,
-      isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+      step.run.expansion,
+      step.run.allowRequests,
+      state,
+      config,
+      cliOptions,
+      isDebug,
+      isVerbose,
+      step.run.prompt,
+      { notify: step.run.notify, requestTimeout: step.run.requestTimeout, circuitName: circuit.name, stepIndex: state.stepIndex },
     );
-
-    if (isDebug) {
-      console.log(`\n  ${c.blue}└── ${c.dim}(${runExpansion.expandedPrompt.length} chars)${c.reset}`);
-    } else if (isVerbose) {
-      console.log(`  ${c.dim}Expanded RUN prompt (${runExpansion.expandedPrompt.length} chars)${c.reset}`);
-    }
-    if (cliOptions.raw) {
-      rawLog("RAW ENGINEER RESPONSE (RUN)", runExpansion.rawResponse);
-    }
   }
 
   // Cache expansion in case BIN fails and we need to retry
@@ -531,10 +517,11 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
         : null,
     evalHistory,
     executionHistory: state.iterations,
+    allowRequests: step.eval.allowRequests,
   };
 
   // ── Expand EVAL prompt (or skip for raw) ──
-  let evalExpansion: import("./types.ts").ExpansionResult;
+  let evalExpansion: ExpansionResult;
   const evalExpMode = step.eval.expansion;
 
   if (evalExpMode === "raw") {
@@ -550,38 +537,21 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     state.cachedEvalExpansion = null;
     console.log(`  ${c.dim}Reusing cached EVAL expansion (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
   } else {
-    // auto or custom expansion
-    const expandOpts = typeof evalExpMode === "object"
-      ? { modelOverride: evalExpMode.model, focus: evalExpMode.focus }
-      : undefined;
-    const expandModel = expandOpts?.modelOverride ?? config.promptEngineerModel;
-
-    if (isDebug) {
-      console.log(`\n  ${c.magenta}┌─ USER PROMPT (EVAL) ──${c.reset}`);
-      console.log(`  ${c.magenta}│${c.reset} ${step.eval.prompt}`);
-      if (expandOpts?.focus) {
-        console.log(`  ${c.magenta}│${c.reset} ${c.dim}FOCUS: ${expandOpts.focus.slice(0, 200)}${c.reset}`);
-      }
-      console.log(`  ${c.magenta}└──${c.reset}`);
-    }
-    console.log(`  ${c.dim}Expanding EVAL prompt via ${expandModel}...${c.reset}`);
-    if (isDebug) {
-      process.stdout.write(`\n  ${c.blue}┌─ EXPANDED EVAL PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
-    }
-    evalExpansion = await harness.expandEval(
+    // auto or custom expansion — may loop if request_input is triggered
+    evalExpansion = await expandWithRequestLoop(
+      harness,
+      "eval",
       evalContext,
-      expandOpts,
-      isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+      step.eval.expansion,
+      step.eval.allowRequests,
+      state,
+      config,
+      cliOptions,
+      isDebug,
+      isVerbose,
+      step.eval.prompt,
+      { notify: step.eval.notify, requestTimeout: step.eval.requestTimeout, circuitName: circuit.name, stepIndex: state.stepIndex },
     );
-
-    if (isDebug) {
-      console.log(`\n  ${c.blue}└── ${c.dim}(${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
-    } else if (isVerbose) {
-      console.log(`  ${c.dim}Expanded EVAL prompt (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
-    }
-    if (cliOptions.raw) {
-      rawLog("RAW ENGINEER RESPONSE (EVAL)", evalExpansion.rawResponse);
-    }
   }
 
   // Cache expansion in case BIN fails and we need to retry
@@ -756,6 +726,86 @@ function makeStreamHandler(
   };
 }
 
+/**
+ * Expand a prompt with request_input loop support.
+ * If the prompt engineer emits <request_input> and the step has ALLOW_REQUEST conditions,
+ * prompt the user, store input in scratchpad, and re-expand.
+ */
+async function expandWithRequestLoop(
+  harness: Harness,
+  role: "run" | "eval",
+  context: ExpansionContext,
+  expansionMode: import("./types.ts").ExpansionMode,
+  allowRequests: string[] | undefined,
+  state: StepState,
+  config: CircuitConfig,
+  cliOptions: CLIOptions,
+  isDebug: boolean,
+  isVerbose: boolean,
+  userPrompt: string,
+  requestOpts?: { notify?: string; requestTimeout?: number; circuitName?: string; stepIndex?: number },
+): Promise<ExpansionResult> {
+  const expandOpts = typeof expansionMode === "object"
+    ? { modelOverride: expansionMode.model, focus: expansionMode.focus }
+    : undefined;
+  const expandModel = expandOpts?.modelOverride ?? config.promptEngineerModel;
+  const roleLabel = role.toUpperCase();
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (isDebug) {
+      console.log(`\n  ${c.magenta}┌─ USER PROMPT (${roleLabel}) ──${c.reset}`);
+      console.log(`  ${c.magenta}│${c.reset} ${userPrompt}`);
+      if (expandOpts?.focus) {
+        console.log(`  ${c.magenta}│${c.reset} ${c.dim}FOCUS: ${expandOpts.focus.slice(0, 200)}${c.reset}`);
+      }
+      console.log(`  ${c.magenta}└──${c.reset}`);
+    }
+    console.log(`  ${c.dim}Expanding ${roleLabel} prompt via ${expandModel}...${c.reset}`);
+    if (isDebug) {
+      process.stdout.write(`\n  ${c.blue}┌─ EXPANDED ${roleLabel} PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
+    }
+
+    const expansion = role === "run"
+      ? await harness.expandRun(
+          context,
+          expandOpts,
+          isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+        )
+      : await harness.expandEval(
+          context,
+          expandOpts,
+          isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+        );
+
+    if (isDebug) {
+      console.log(`\n  ${c.blue}└── ${c.dim}(${expansion.expandedPrompt.length} chars)${c.reset}`);
+    } else if (isVerbose) {
+      console.log(`  ${c.dim}Expanded ${roleLabel} prompt (${expansion.expandedPrompt.length} chars)${c.reset}`);
+    }
+    if (cliOptions.raw) {
+      rawLog(`RAW ENGINEER RESPONSE (${roleLabel})`, expansion.rawResponse);
+    }
+
+    // Check for request_input in the engineer's response
+    const gotInput = await handleRequestInput(
+      expansion.rawResponse,
+      allowRequests,
+      state.scratchpad,
+      requestOpts,
+    );
+
+    if (gotInput) {
+      // Update context with new scratchpad and re-expand
+      context.scratchpad = { ...state.scratchpad };
+      console.log(`  ${c.dim}Re-expanding with user input...${c.reset}`);
+      continue;
+    }
+
+    return expansion;
+  }
+}
+
 function rawLog(label: string, data: string): void {
   console.log(`\n${c.gray}┌── RAW: ${label} ──${c.reset}`);
   console.log(`${c.gray}${data}${c.reset}`);
@@ -772,4 +822,110 @@ function resolveBin(bin: string, aliases: Record<string, string>): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Prompt the user for input via stdin.
+ * Returns the user's response, or null if stdin is closed (Ctrl-D).
+ */
+function promptUser(message: string): Promise<string | null> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise((resolve) => {
+    rl.question(`${message}\n${c.cyan}> ${c.reset}`, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+    rl.on("close", () => resolve(null));
+  });
+}
+
+/**
+ * Handle a request_input from the prompt engineer.
+ * Checks ALLOW_REQUEST conditions, fires NOTIFY bin, prompts user with optional timeout.
+ * Returns true if input was collected, false if denied, timed out, or aborted.
+ */
+async function handleRequestInput(
+  rawResponse: string,
+  allowRequests: string[] | undefined,
+  scratchpad: Record<string, string>,
+  opts?: { notify?: string; requestTimeout?: number; circuitName?: string; stepIndex?: number },
+): Promise<boolean> {
+  const request = parseRequestInput(rawResponse);
+  if (!request) return false;
+  if (!allowRequests || allowRequests.length === 0) return false;
+
+  console.log(`\n  ${c.yellow}${c.bold}INPUT REQUESTED${c.reset}`);
+  console.log(`  ${c.dim}Reason: ${request.reason}${c.reset}`);
+  console.log(`  ${c.white}${request.message}${c.reset}`);
+
+  // Fire NOTIFY bin (fire-and-forget)
+  if (opts?.notify) {
+    fireNotify(opts.notify, {
+      reason: request.reason,
+      message: request.message,
+      key: request.key,
+      circuitName: opts.circuitName ?? "",
+      stepIndex: opts.stepIndex ?? 0,
+    });
+  }
+
+  // Prompt user, optionally with timeout
+  let answer: string | null;
+  if (opts?.requestTimeout && opts.requestTimeout > 0) {
+    console.log(`  ${c.dim}Waiting for input (${opts.requestTimeout}s timeout)...${c.reset}`);
+    answer = await Promise.race([
+      promptUser(""),
+      sleep(opts.requestTimeout * 1000).then(() => null as string | null),
+    ]);
+    if (answer === null) {
+      console.log(`  ${c.yellow}Request timed out after ${opts.requestTimeout}s — resuming${c.reset}`);
+      return false;
+    }
+  } else {
+    answer = await promptUser("");
+  }
+
+  if (answer === null) {
+    console.log(`  ${c.dim}Input cancelled${c.reset}`);
+    return false;
+  }
+
+  scratchpad[request.key] = answer;
+  console.log(`  ${c.green}Stored as scratchpad key: ${request.key}${c.reset}`);
+  return true;
+}
+
+/**
+ * Fire a NOTIFY bin command with request context as environment variables.
+ * Fire-and-forget — exit code is ignored.
+ */
+function fireNotify(
+  command: string,
+  ctx: { reason: string; message: string; key: string; circuitName: string; stepIndex: number },
+): void {
+  const parts = command.split(/\s+/);
+  const [cmd, ...args] = parts;
+  if (!cmd) return;
+
+  try {
+    const proc = spawnProcess(cmd, args, {
+      stdio: "ignore",
+      detached: true,
+      env: {
+        ...process.env,
+        CIRCUIT_REQUEST_REASON: ctx.reason,
+        CIRCUIT_REQUEST_MESSAGE: ctx.message,
+        CIRCUIT_REQUEST_KEY: ctx.key,
+        CIRCUIT_NAME: ctx.circuitName,
+        CIRCUIT_STEP: String(ctx.stepIndex + 1),
+      },
+    });
+    proc.unref();
+    console.log(`  ${c.dim}NOTIFY fired: ${command}${c.reset}`);
+  } catch {
+    console.log(`  ${c.yellow}NOTIFY failed to spawn: ${command}${c.reset}`);
+  }
 }

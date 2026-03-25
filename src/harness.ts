@@ -27,6 +27,14 @@ Your expanded prompt must:
 6. If this is a retry, emphasize what previously failed and direct the agent to take a different approach
 7. If retries are running low, signal urgency and suggest more creative/radical approaches
 
+If the context includes ALLOWED REQUEST CONDITIONS, you may request user input instead of \
+generating an expanded prompt when the failure clearly matches one of the listed conditions. \
+Only use this when the iteration would fail without information only the user can provide. Use:
+<request_input key="descriptive_key" reason="matching condition">
+Your message to the user explaining what you need and why
+</request_input>
+Do NOT use request_input if no ALLOWED REQUEST CONDITIONS are listed.
+
 You may also update your own scratchpad to track meta-observations across iterations. \
 Use these tags in your response (outside the expanded_prompt tags):
 <engineer_scratchpad_set key="observation_name">your observation</engineer_scratchpad_set>
@@ -50,6 +58,14 @@ Your expanded prompt must:
 3. Reference the working directory and what should have changed
 4. Be strict but fair in what constitutes success
 5. If previous evaluations found issues that were supposedly fixed, verify those specific fixes
+
+If the context includes ALLOWED REQUEST CONDITIONS, you may request user input instead of \
+generating an expanded prompt when the failure clearly matches one of the listed conditions. \
+Only use this when evaluation cannot proceed without information only the user can provide. Use:
+<request_input key="descriptive_key" reason="matching condition">
+Your message to the user explaining what you need and why
+</request_input>
+Do NOT use request_input if no ALLOWED REQUEST CONDITIONS are listed.
 
 The evaluation prompt MUST instruct the agent to end its response with exactly one of:
 <verdict>SUCCESS</verdict>
@@ -274,6 +290,14 @@ export class Harness {
     // Step context (multi-step)
     if (context.stepContext) {
       sections.push(`PREVIOUS STEPS COMPLETED:\n${context.stepContext}`);
+    }
+
+    // ALLOW_REQUEST conditions
+    if (context.allowRequests && context.allowRequests.length > 0) {
+      const conditions = context.allowRequests.map((c) => `  - ${c}`).join("\n");
+      sections.push(
+        `ALLOWED REQUEST CONDITIONS (you may request user input for these):\n${conditions}`,
+      );
     }
 
     // Environment

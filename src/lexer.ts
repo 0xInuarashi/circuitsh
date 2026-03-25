@@ -394,8 +394,42 @@ export function tokenize(source: string): Token[] {
       );
     }
 
-    // Indent level 2: RETRY, or INTO: block targets (RUN/EVAL with optional WITH)
+    // Indent level 2: ALLOW_REQUEST, RETRY, or INTO: block targets (RUN/EVAL with optional WITH)
     if (level === 2) {
+      // ALLOW_REQUEST "condition"
+      if (stripped.startsWith("ALLOW_REQUEST ")) {
+        const condition = unquote(stripped.slice("ALLOW_REQUEST ".length).trim());
+        if (!condition) {
+          throw new ParseError("ALLOW_REQUEST condition cannot be empty", line);
+        }
+        tokens.push({ type: "ALLOW_REQUEST", value: condition, line });
+        continue;
+      }
+
+      // NOTIFY <bin command>
+      if (stripped.startsWith("NOTIFY ")) {
+        const command = unquote(stripped.slice("NOTIFY ".length).trim());
+        if (!command) {
+          throw new ParseError("NOTIFY command cannot be empty", line);
+        }
+        tokens.push({ type: "NOTIFY", value: command, line });
+        continue;
+      }
+
+      // REQUEST_TIMEOUT <seconds>
+      if (stripped.startsWith("REQUEST_TIMEOUT ")) {
+        const numStr = stripped.slice("REQUEST_TIMEOUT ".length).trim();
+        const num = parseInt(numStr, 10);
+        if (isNaN(num) || num <= 0) {
+          throw new ParseError(
+            `REQUEST_TIMEOUT must be a positive integer (seconds), got: ${numStr}`,
+            line,
+          );
+        }
+        tokens.push({ type: "REQUEST_TIMEOUT", value: numStr, line });
+        continue;
+      }
+
       if (stripped.startsWith("RETRY ")) {
         const numStr = stripped.slice("RETRY ".length).trim();
         const num = parseInt(numStr, 10);

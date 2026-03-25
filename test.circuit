@@ -1,0 +1,84 @@
+# Full language test — exercises every Circuit feature
+PROVIDER Openrouter
+API_KEY ${OPENROUTER_API_KEY}
+PROMPT_ENGINEER_MODEL anthropic/claude-sonnet-4-6
+ALIAS claude "claude --dangerously-skip-permissions"
+ALIAS aider "aider --model sonnet"
+ALIAS bench "./bench.sh"
+RUN_BIN claude
+EVAL_BIN claude
+DIR ~/test-project
+LOG_DIR .circuit-runs
+CHECKPOINT on
+TIMEOUT 300
+
+CIRCUIT Full language test:
+  # Fire-and-forget RUN (no EVAL)
+  RUN Initialize the project with cargo init
+
+  # Basic RUN + EVAL with RETRY
+  RUN Build a sorting algorithm in Rust
+  EVAL Does it compile and pass all tests?
+    RETRY 5
+
+  # WITH overrides (per-step bin)
+  RUN "optimize the hot path" WITH aider
+  EVAL "run benchmarks" WITH bench
+    RETRY 3
+
+  # RAW_RUN and RAW_EVAL (no expansion)
+  RAW_RUN "cargo test --release 2>&1" WITH bench
+  RAW_EVAL "cargo bench -- --output-format json" WITH bench
+    RETRY 2
+
+  # ALLOW_REQUEST on RUN with NOTIFY and REQUEST_TIMEOUT
+  RUN Build a Cloudflare worker that proxies requests
+    ALLOW_REQUEST "an API key is required"
+    ALLOW_REQUEST "the zone ID is needed"
+    NOTIFY ./notify.sh
+    REQUEST_TIMEOUT 600
+  EVAL Does the worker handle requests correctly?
+    RETRY 5
+
+  # ALLOW_REQUEST on EVAL with NOTIFY (before RETRY)
+  RUN Deploy the worker to production
+  EVAL Verify the deployment is live and serving traffic
+    ALLOW_REQUEST "deployment credentials are needed"
+    ALLOW_REQUEST "DNS verification requires manual input"
+    NOTIFY ./notify.sh --channel ops
+    REQUEST_TIMEOUT 300
+    RETRY 3
+
+  # EXPAND with custom model (no FOCUS)
+  EXPAND AS "deepseek/deepseek-r1" FOR "build the query engine" INTO:
+    RUN WITH claude
+  EVAL Does the query engine return correct results?
+    RETRY 5
+
+  # EXPAND with FOCUS
+  EXPAND AS "anthropic/claude-sonnet-4-6" \
+    FOR "optimize the compression algorithm" \
+    FOCUS "target throughput over ratio, use SIMD intrinsics" \
+    INTO:
+    RUN WITH claude
+  EVAL Is throughput above baseline?
+    RETRY 10
+
+  # EXPAND targeting EVAL with ALLOW_REQUEST
+  RUN Implement the indexer
+  EXPAND AS "anthropic/claude-sonnet-4-6" \
+    FOR "verify the indexer handles crash recovery" \
+    FOCUS "test with 1M documents, verify WAL replay" \
+    INTO:
+    EVAL WITH bench
+    ALLOW_REQUEST "test dataset credentials needed"
+    RETRY 8
+
+  # Line continuation in prompts
+  RUN Build a web scraper in Python \
+    that handles rate limiting, \
+    retries on failure, \
+    and respects robots.txt
+  EVAL Test the scraper against 3 different sites \
+    and verify it handles errors gracefully
+    RETRY 5

@@ -9,7 +9,9 @@ A `.circuit` file defines a **circuit**: a series of steps where an AI agent doe
 ```
 RUN → EVAL → pass? → next step
               ↓ fail
-           feedback → RUN (retry)
+           feedback → needs human input? → ALLOW_REQUEST? → pause → user input → RUN (retry)
+                        ↓ no                                  ↓ not allowed
+                      RUN (retry)                           RUN (retry)
 ```
 
 Circuit is the wiring, not the components. The AI agents (Claude, aider, codex, etc.) improve independently — Circuit plugs them together.
@@ -106,6 +108,91 @@ If no `<verdict>` tag is found, it defaults to FAILURE (safe default). The entir
 ```
 
 Max retries for the RUN/EVAL pair. Total attempts = RETRY + 1. Default is 3 if omitted. Nested under EVAL.
+
+### ALLOW_REQUEST
+
+```circuit
+  RUN "build a cloudflare connector"
+    ALLOW_REQUEST "an API key is required"
+    ALLOW_REQUEST "the zone ID is needed"
+  EVAL "does the connector work?"
+    ALLOW_REQUEST "deployment credentials needed"
+    RETRY 5
+```
+
+A permission gate that allows the prompt engineer to request user input during a step. Without `ALLOW_REQUEST`, the circuit is fully autonomous — if it gets stuck, it retries until exhaustion. No escape hatch.
+
+With `ALLOW_REQUEST`, the circuit author declares specific conditions under which pausing for human input is acceptable. The prompt engineer sees these conditions, and when a failure matches one, it can request input instead of burning a retry.
+
+**Rules:**
+- Nested under `RUN` or `EVAL` at indent level 2
+- Multiple `ALLOW_REQUEST` conditions are allowed per step
+- Must come **before** `NOTIFY`, `REQUEST_TIMEOUT`, and `RETRY` — ordering is enforced by the parser
+- The prompt engineer fuzzy-matches failure patterns against the declared conditions
+- User input is stored in the scratchpad and available to subsequent expansions
+- Requesting input does **not** consume a retry
+
+```circuit
+CIRCUIT deploy:
+  RUN "deploy to production"
+    ALLOW_REQUEST "cloud credentials are required"
+    NOTIFY ./notify.sh
+    REQUEST_TIMEOUT 600
+  EVAL "verify deployment is live"
+    ALLOW_REQUEST "manual DNS verification needed"
+    NOTIFY ./notify.sh --channel ops
+    REQUEST_TIMEOUT 300
+    RETRY 3
+```
+
+### NOTIFY
+
+```circuit
+    NOTIFY ./notify.sh
+    NOTIFY ./notify.sh --channel ops --priority high
+```
+
+Fires a bin command when the prompt engineer requests user input. Fire-and-forget — the engine doesn't wait for the script to finish or check its exit code. The user owns the notification logic.
+
+**Requires** at least one `ALLOW_REQUEST` — the parser rejects `NOTIFY` without it.
+
+The engine injects context as environment variables:
+
+| Variable | Description |
+|---|---|
+| `CIRCUIT_REQUEST_REASON` | The matched condition from ALLOW_REQUEST |
+| `CIRCUIT_REQUEST_MESSAGE` | The prompt engineer's message to the user |
+| `CIRCUIT_REQUEST_KEY` | The scratchpad key being requested |
+| `CIRCUIT_NAME` | The circuit name |
+| `CIRCUIT_STEP` | Step number (1-indexed) |
+
+Example notify script:
+
+```bash
+#!/bin/bash
+curl -X POST "$SLACK_WEBHOOK" \
+  -d "{\"text\": \"Circuit paused: $CIRCUIT_REQUEST_MESSAGE\"}"
+```
+
+### REQUEST_TIMEOUT
+
+```circuit
+    REQUEST_TIMEOUT 600
+```
+
+Seconds to wait for user input before giving up. If the timeout expires, the request is abandoned and the loop resumes retrying autonomously. Default is no timeout (wait forever).
+
+**Requires** at least one `ALLOW_REQUEST` — the parser rejects `REQUEST_TIMEOUT` without it.
+
+### Modifier Ordering
+
+All step modifiers at indent level 2 must follow this order:
+
+```
+ALLOW_REQUEST* → NOTIFY? → REQUEST_TIMEOUT? → RETRY?
+```
+
+The parser enforces this ordering and rejects violations.
 
 ### WITH
 
@@ -220,6 +307,12 @@ The parser catches these errors at parse time:
 - `RETRY` with no preceding `EVAL` at the same indent level
 - `EXPAND` without `AS`, `FOR`, or `INTO:`
 - `EVAL` without a preceding `RUN`
+- `ALLOW_REQUEST` after `RETRY` — must come before
+- `ALLOW_REQUEST` with no preceding `RUN` or `EVAL`
+- `NOTIFY` without `ALLOW_REQUEST` — requires at least one
+- `NOTIFY` after `RETRY` — must come before
+- `REQUEST_TIMEOUT` without `ALLOW_REQUEST` — requires at least one
+- `REQUEST_TIMEOUT` after `RETRY` — must come before
 
 ### RUN without EVAL
 
@@ -266,6 +359,7 @@ But what actually gets sent to `RUN_BIN` is a rich prompt expanded by the prompt
 - **Environment** — OS, shell, working directory, date
 - **Execution history** — compressed log of all previous iterations
 - **Step context** — summary of previous steps (for multi-step circuits)
+- **ALLOW_REQUEST conditions** — what the engineer is permitted to request user input for
 
 The prompt engineer model weaves all of this into a single coherent prompt. It's not a rigid template — it adapts based on context, emphasizing different things on iteration 1 vs iteration 8.
 
@@ -282,6 +376,8 @@ Both the AI agents and the prompt engineer maintain scratchpads — key-value st
 ```
 <engineer_scratchpad_set key="note">agent responds better to structured prompts</engineer_scratchpad_set>
 ```
+
+**User input via ALLOW_REQUEST** — when the prompt engineer requests user input, the response is stored in the agent scratchpad under the key specified in the request. Both the agent and the prompt engineer can see it on subsequent iterations.
 
 ## Line Continuation
 
@@ -422,6 +518,55 @@ CIRCUIT Build a sorting algorithm that beats std lib sort:
   EVAL Run the benchmarks and verify the custom sort beats std sort \
     on 80%+ of cases. Verify correctness on edge cases.
     RETRY 10
+```
+
+## Example: Full-Featured Circuit
+
+```circuit
+PROVIDER Openrouter
+API_KEY ${OPENROUTER_API_KEY}
+PROMPT_ENGINEER_MODEL anthropic/claude-sonnet-4-6
+ALIAS claude "claude --dangerously-skip-permissions"
+ALIAS aider "aider --model sonnet"
+ALIAS bench "./bench.sh"
+RUN_BIN claude
+EVAL_BIN claude
+DIR ~/my-project
+CHECKPOINT on
+TIMEOUT 300
+
+CIRCUIT Deploy a Cloudflare worker:
+  # Step 1: scaffold (fire-and-forget)
+  RUN Initialize the project with wrangler
+
+  # Step 2: build with a different tool
+  RUN "implement the API proxy logic" WITH aider
+  EVAL "does it type-check and pass unit tests?"
+    RETRY 5
+
+  # Step 3: integration test with custom expansion
+  EXPAND AS "deepseek/deepseek-r1" \
+    FOR "write integration tests for the proxy" \
+    FOCUS "test edge cases: timeouts, malformed headers, large payloads" \
+    INTO:
+    RUN WITH claude
+  EVAL "all integration tests pass"
+    RETRY 3
+
+  # Step 4: deploy — may need credentials from user
+  RUN Deploy the worker to Cloudflare
+    ALLOW_REQUEST "an API token is required"
+    ALLOW_REQUEST "the account ID is needed"
+    NOTIFY ./notify.sh
+    REQUEST_TIMEOUT 600
+  EVAL Verify the worker is live and responding
+    ALLOW_REQUEST "DNS verification requires manual input"
+    RETRY 5
+
+  # Step 5: benchmark with a script, no expansion needed
+  RAW_RUN "wrk -t12 -c400 -d30s https://my-worker.dev" WITH bench
+  RAW_EVAL "./check-latency.sh --p99 50ms" WITH bench
+    RETRY 2
 ```
 
 ## Local Models

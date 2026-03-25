@@ -1,0 +1,27 @@
+# Build a CLI tool — showcases Circuit language features
+PROVIDER Openrouter
+API_KEY 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
+PROMPT_ENGINEER_MODEL stepfun/step-3.5-flash:free
+ALIAS claude "claude --dangerously-skip-permissions"
+RUN_BIN claude
+DIR ~/circuit-demo
+
+CIRCUIT Build a markdown link checker CLI:
+  # Step 1: scaffold the project
+  RUN Initialize a new Node.js project with TypeScript support
+
+  # Step 2: build it
+  RUN Build a CLI tool called mdlinks that reads a markdown file, \
+    extracts all URLs, checks if they return 200, \
+    and prints a report of broken links with line numbers
+  EVAL Does it compile with tsc and does running \
+    mdlinks --help show usage info?
+    RETRY 3
+
+  # Step 3: test with a real file
+  RUN Create a test.md with a mix of valid and broken links, \
+    then run mdlinks against it and verify the output is correct
+  EVAL Run mdlinks test.md and verify it correctly identifies \
+    broken vs working links in its output
+    ALLOW_REQUEST "a network connection issue prevents testing"
+    RETRY 3

@@ -15,6 +15,9 @@ export interface RunStep {
   prompt: string;
   bin?: string; // from WITH clause
   expansion: ExpansionMode;
+  allowRequests?: string[]; // conditions under which user input can be requested
+  notify?: string; // NOTIFY bin command (requires allowRequests)
+  requestTimeout?: number; // seconds to wait for user input (requires allowRequests)
   line: number;
 }
 
@@ -23,6 +26,9 @@ export interface EvalStep {
   retry: number;
   bin?: string; // from WITH clause
   expansion: ExpansionMode;
+  allowRequests?: string[]; // conditions under which user input can be requested
+  notify?: string; // NOTIFY bin command (requires allowRequests)
+  requestTimeout?: number; // seconds to wait for user input (requires allowRequests)
   line: number;
 }
 
@@ -61,6 +67,9 @@ export type TokenType =
   | "RAW_EVAL"
   | "EXPAND"
   | "RETRY"
+  | "ALLOW_REQUEST"
+  | "NOTIFY"
+  | "REQUEST_TIMEOUT"
   | "COMMENT"
   | "BLANK";
 
@@ -200,6 +209,7 @@ export interface ExpansionContext {
   stepContext: string | null; // summary of previous steps for multi-step
   evalHistory: string | null; // compressed eval history for EVAL expansion
   executionHistory: IterationResult[]; // full history for prompt engineer
+  allowRequests?: string[]; // ALLOW_REQUEST conditions — enables request_input
 }
 
 export interface EnvironmentInfo {

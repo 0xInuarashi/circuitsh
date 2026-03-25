@@ -90,6 +90,11 @@ export function parse(source: string): CircuitAST {
           "RETRY has no preceding EVAL at the same indentation level",
           tok.line,
         );
+      } else if (tok.type === "ALLOW_REQUEST") {
+        throw new ParseError(
+          "ALLOW_REQUEST has no preceding RUN or EVAL",
+          tok.line,
+        );
       } else if (EVAL_STARTERS.has(tok.type)) {
         throw new ParseError(
           `${tok.type} without preceding RUN — every step must start with a RUN`,
@@ -101,6 +106,15 @@ export function parse(source: string): CircuitAST {
           tok.line,
         );
       }
+
+      // ── Consume RUN modifiers: ALLOW_REQUEST* → NOTIFY? → REQUEST_TIMEOUT? ──
+      const runMods = consumeRequestModifiers(tokens, i);
+      if (runMods.allowRequests.length > 0) {
+        run.allowRequests = runMods.allowRequests;
+      }
+      if (runMods.notify) run.notify = runMods.notify;
+      if (runMods.requestTimeout) run.requestTimeout = runMods.requestTimeout;
+      i = runMods.newI;
 
       // ── Parse eval-like part (optional) ──
       let evalStep: EvalStep | null = null;
@@ -250,11 +264,19 @@ function parseExpandIntoEval(
   };
 
   let newI = i + 2;
+
+  // Consume modifiers: ALLOW_REQUEST* → NOTIFY? → REQUEST_TIMEOUT?
+  const mods = consumeRequestModifiers(tokens, newI);
+  newI = mods.newI;
+
   let retry = 3;
   if (newI < tokens.length && tokens[newI]!.type === "RETRY") {
     retry = parseInt(tokens[newI]!.value, 10);
     newI++;
   }
+
+  // Enforce: no modifiers after RETRY
+  enforceNoModifiersAfterRetry(tokens, newI);
 
   return {
     eval: {
@@ -262,6 +284,9 @@ function parseExpandIntoEval(
       retry,
       ...(targetTok.secondaryValue ? { bin: targetTok.secondaryValue } : {}),
       expansion,
+      ...(mods.allowRequests.length > 0 ? { allowRequests: mods.allowRequests } : {}),
+      ...(mods.notify ? { notify: mods.notify } : {}),
+      ...(mods.requestTimeout ? { requestTimeout: mods.requestTimeout } : {}),
       line: expandTok.line,
     },
     newI,
@@ -287,12 +312,19 @@ function parseEvalWithRetry(
 ): { eval: EvalStep; newI: number } {
   const evalTok = tokens[i]!;
   let newI = i + 1;
-  let retry = 3;
 
+  // Consume modifiers: ALLOW_REQUEST* → NOTIFY? → REQUEST_TIMEOUT?
+  const mods = consumeRequestModifiers(tokens, newI);
+  newI = mods.newI;
+
+  let retry = 3;
   if (newI < tokens.length && tokens[newI]!.type === "RETRY") {
     retry = parseInt(tokens[newI]!.value, 10);
     newI++;
   }
+
+  // Enforce: no modifiers after RETRY
+  enforceNoModifiersAfterRetry(tokens, newI);
 
   return {
     eval: {
@@ -300,10 +332,73 @@ function parseEvalWithRetry(
       retry,
       ...(evalTok.secondaryValue ? { bin: evalTok.secondaryValue } : {}),
       expansion,
+      ...(mods.allowRequests.length > 0 ? { allowRequests: mods.allowRequests } : {}),
+      ...(mods.notify ? { notify: mods.notify } : {}),
+      ...(mods.requestTimeout ? { requestTimeout: mods.requestTimeout } : {}),
       line: evalTok.line,
     },
     newI,
   };
+}
+
+/**
+ * Consume request-related modifiers in order: ALLOW_REQUEST* → NOTIFY? → REQUEST_TIMEOUT?
+ * Enforces ordering and validates that NOTIFY/REQUEST_TIMEOUT require ALLOW_REQUEST.
+ */
+function consumeRequestModifiers(
+  tokens: Token[],
+  i: number,
+): { allowRequests: string[]; notify: string | null; requestTimeout: number | null; newI: number } {
+  const allowRequests: string[] = [];
+  let notify: string | null = null;
+  let requestTimeout: number | null = null;
+  let newI = i;
+
+  // ALLOW_REQUEST*
+  while (newI < tokens.length && tokens[newI]!.type === "ALLOW_REQUEST") {
+    allowRequests.push(tokens[newI]!.value);
+    newI++;
+  }
+
+  // NOTIFY?
+  if (newI < tokens.length && tokens[newI]!.type === "NOTIFY") {
+    if (allowRequests.length === 0) {
+      throw new ParseError(
+        "NOTIFY requires at least one ALLOW_REQUEST",
+        tokens[newI]!.line,
+      );
+    }
+    notify = tokens[newI]!.value;
+    newI++;
+  }
+
+  // REQUEST_TIMEOUT?
+  if (newI < tokens.length && tokens[newI]!.type === "REQUEST_TIMEOUT") {
+    if (allowRequests.length === 0) {
+      throw new ParseError(
+        "REQUEST_TIMEOUT requires at least one ALLOW_REQUEST",
+        tokens[newI]!.line,
+      );
+    }
+    requestTimeout = parseInt(tokens[newI]!.value, 10);
+    newI++;
+  }
+
+  return { allowRequests, notify, requestTimeout, newI };
+}
+
+/**
+ * Enforce that no request modifiers appear after RETRY.
+ */
+function enforceNoModifiersAfterRetry(tokens: Token[], i: number): void {
+  if (i >= tokens.length) return;
+  const t = tokens[i]!.type;
+  if (t === "ALLOW_REQUEST" || t === "NOTIFY" || t === "REQUEST_TIMEOUT") {
+    throw new ParseError(
+      `${t} must come before RETRY`,
+      tokens[i]!.line,
+    );
+  }
 }
 
 /**

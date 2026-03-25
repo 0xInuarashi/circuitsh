@@ -76,3 +76,28 @@ export function parseExpandedPrompt(engineerOutput: string): string | null {
   );
   return match ? match[1]!.trim() : null;
 }
+
+/**
+ * Parse <request_input key="..." reason="...">message</request_input>
+ * from prompt engineer output. Returns null if tag not found.
+ */
+export function parseRequestInput(
+  output: string,
+): { key: string; reason: string; message: string } | null {
+  const match = output.match(/<request_input([^>]*)>([\s\S]*?)<\/request_input>/i);
+  if (!match) return null;
+
+  const attrs = match[1]!;
+  const message = match[2]!.trim();
+
+  const keyMatch = attrs.match(/key="([^"]*)"/);
+  const reasonMatch = attrs.match(/reason="([^"]*)"/);
+
+  if (!keyMatch || !reasonMatch) return null;
+
+  return {
+    key: keyMatch[1]!.trim(),
+    reason: reasonMatch[1]!.trim(),
+    message,
+  };
+}
