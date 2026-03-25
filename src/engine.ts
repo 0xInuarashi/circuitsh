@@ -910,19 +910,37 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Prompt the user for input via stdin.
- * Returns the user's response, or null if stdin is closed (Ctrl-D).
+ * Returns the user's response, or null if stdin is closed (Ctrl-D) or timeout fires.
+ * Timeout is handled internally so the readline interface is always cleaned up.
  */
-function promptUser(message: string): Promise<string | null> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+function promptUser(message: string, timeoutMs?: number): Promise<string | null> {
   return new Promise((resolve) => {
-    rl.question(`${message}\n${c.cyan}> ${c.reset}`, (answer) => {
-      rl.close();
-      resolve(answer);
+    let resolved = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    // Write prompt manually — avoid readline echo doubling
+    if (message) process.stdout.write(message + "\n");
+    process.stdout.write(`${c.cyan}> ${c.reset}`);
+
+    const rl = createInterface({
+      input: process.stdin,
+      terminal: false, // no readline echo — terminal handles it
     });
-    rl.on("close", () => resolve(null));
+
+    const finish = (value: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      if (timer) clearTimeout(timer);
+      rl.close();
+      resolve(value);
+    };
+
+    if (timeoutMs) {
+      timer = setTimeout(() => finish(null), timeoutMs);
+    }
+
+    rl.once("line", (line) => finish(line));
+    rl.on("close", () => finish(null));
   });
 }
 
@@ -957,23 +975,21 @@ async function handleRequestInput(
   }
 
   // Prompt user, optionally with timeout
-  let answer: string | null;
-  if (opts?.requestTimeout && opts.requestTimeout > 0) {
-    console.log(`  ${c.dim}Waiting for input (${opts.requestTimeout}s timeout)...${c.reset}`);
-    answer = await Promise.race([
-      promptUser(""),
-      sleep(opts.requestTimeout * 1000).then(() => null as string | null),
-    ]);
-    if (answer === null) {
-      console.log(`  ${c.yellow}Request timed out after ${opts.requestTimeout}s — resuming${c.reset}`);
-      return false;
-    }
-  } else {
-    answer = await promptUser("");
+  const timeoutMs = opts?.requestTimeout && opts.requestTimeout > 0
+    ? opts.requestTimeout * 1000
+    : undefined;
+  if (timeoutMs) {
+    console.log(`  ${c.dim}Waiting for input (${opts!.requestTimeout}s timeout)...${c.reset}`);
   }
 
+  const answer = await promptUser("", timeoutMs);
+
   if (answer === null) {
-    console.log(`  ${c.dim}Input cancelled${c.reset}`);
+    console.log(
+      timeoutMs
+        ? `  ${c.yellow}Request timed out after ${opts!.requestTimeout}s — resuming${c.reset}`
+        : `  ${c.dim}Input cancelled${c.reset}`,
+    );
     return false;
   }
 
