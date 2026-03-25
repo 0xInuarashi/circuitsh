@@ -25,7 +25,7 @@ import {
   logIteration,
   makeLogPath,
 } from "./storage.ts";
-import { AuthError, BinTimeoutError, RateLimitError } from "./errors.ts";
+import { AuthError, BinNotFoundError, BinTimeoutError, RateLimitError } from "./errors.ts";
 
 // ── ANSI Colors ──
 const c = {
@@ -69,6 +69,9 @@ export async function executeCircuit(
     mkdirSync(config.dir, { recursive: true });
     console.log(`Created directory: ${config.dir}`);
   }
+
+  // Pre-flight: validate all bins exist before execution
+  validateBins(circuit, config);
 
   const logPath = makeLogPath(circuit.name, config.logDir);
   logCircuitStart(logPath, circuit.name, config, circuit.steps);
@@ -856,6 +859,49 @@ function rawLog(label: string, data: string): void {
  */
 function resolveBin(bin: string, aliases: Record<string, string>): string {
   return aliases[bin] ?? bin;
+}
+
+/**
+ * Pre-flight check: validate that all bins referenced in the circuit exist.
+ * Checks RUN_BIN, EVAL_BIN, per-step WITH overrides, and NOTIFY commands.
+ */
+function validateBins(
+  circuit: import("./types.ts").CircuitBlock,
+  config: CircuitConfig,
+): void {
+  const bins = new Set<string>();
+
+  // Default bins
+  bins.add(resolveBin(config.runBin, config.aliases));
+  if (config.evalBin) bins.add(resolveBin(config.evalBin, config.aliases));
+
+  for (const step of circuit.steps) {
+    // Per-step WITH overrides
+    if (step.run.bin) bins.add(resolveBin(step.run.bin, config.aliases));
+    if (step.eval?.bin) bins.add(resolveBin(step.eval.bin, config.aliases));
+
+    // NOTIFY commands
+    if (step.run.notify) bins.add(step.run.notify);
+    if (step.eval?.notify) bins.add(step.eval.notify);
+  }
+
+  const missing: string[] = [];
+  for (const bin of bins) {
+    const cmd = bin.split(/\s+/)[0]!;
+    try {
+      execSync(`command -v ${cmd}`, { encoding: "utf-8", timeout: 3000, stdio: "pipe" });
+    } catch {
+      missing.push(bin);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new BinNotFoundError(
+      missing.length === 1
+        ? missing[0]!
+        : `Multiple bins not found: ${missing.join(", ")}`,
+    );
+  }
 }
 
 function sleep(ms: number): Promise<void> {
