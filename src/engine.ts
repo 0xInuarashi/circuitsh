@@ -113,26 +113,20 @@ export async function executeCircuit(
 
   process.on("SIGINT", handleSigInt);
 
-  try {
-    // Setup complete
-  } catch {
-    process.removeListener("SIGINT", handleSigInt);
-    throw;
-  }
-
   // Wrap entire circuit execution in try/finally to ensure listener cleanup
-  try {
+  const rawLogger = cliOptions.raw
     ? (label: string, data: string) => {
-        console.log(`\n${c.gray}┌── RAW: ${label} ──${c.reset}`);
-        console.log(`${c.gray}${data}${c.reset}`);
-        console.log(`${c.gray}└── END: ${label} ──${c.reset}\n`);
-      }
+      console.log(`\n${c.gray}┌── RAW: ${label} ──${c.reset}`);
+      console.log(`${c.gray}${data}${c.reset}`);
+      console.log(`${c.gray}└── END: ${label} ──${c.reset}\n`);
+    }
     : null;
-  // Ensure working directory exists
-  if (!existsSync(config.dir)) {
-    mkdirSync(config.dir, { recursive: true });
-    console.log(`Created directory: ${config.dir}`);
-  }
+  try {
+    // Ensure working directory exists
+    if (!existsSync(config.dir)) {
+      mkdirSync(config.dir, { recursive: true });
+      console.log(`Created directory: ${config.dir}`);
+    }
 
   // Pre-flight: validate all bins exist before execution
   validateBins(circuit, config);

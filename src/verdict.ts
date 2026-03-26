@@ -27,19 +27,19 @@ export function parseVerdict(
   if (match) {
     const verdictText = match[1]!.trim().toUpperCase();
     if (verdictText === "SUCCESS") {
-      return { verdict: "SUCCESS", feedback: evalOutput };
+      return { verdict: "SUCCESS", feedback: parsedResult };
     }
     if (verdictText === "PROGRESS") {
-      return { verdict: "PROGRESS", feedback: evalOutput };
+      return { verdict: "PROGRESS", feedback: parsedResult };
     }
-    return { verdict: "FAILURE", feedback: evalOutput };
+    return { verdict: "FAILURE", feedback: parsedResult };
   }
 
   // No verdict tag found: default to FAILURE
   return {
     verdict: "FAILURE",
     feedback:
-      evalOutput +
+      parsedResult +
       "\n\n[CIRCUIT: No <verdict> tag found in EVAL output. Defaulting to FAILURE.]",
   };
 }
