@@ -281,7 +281,7 @@ function compressExecutionHistory(history: IterationResult[]): string {
   if (history.length === 0) return "No previous iterations.";
 
   const trunc = (s: string, n: number) =>
-    s.length <= n ? s : s.slice(0, n) + "...";
+    s.length <= n ? s : s.slice(0, n);
 
   const lines: string[] = [];
 
@@ -296,13 +296,13 @@ function compressExecutionHistory(history: IterationResult[]): string {
 
     if (fullIndices.has(i)) {
       lines.push(`--- Iteration ${iter.iteration + 1} [${verdict}] ---`);
-      lines.push(`RUN: ${trunc(iter.expandedRunPrompt, 150)}`);
-      lines.push(`RUN output (exit ${iter.runOutput.exitCode}): ${trunc(iter.runOutput.stdout, 200)}`);
+      lines.push(`RUN: ${trunc(iter.expandedRunPrompt, 2000)}`);
+      lines.push(`RUN output (exit ${iter.runOutput.exitCode}): ${trunc(iter.runOutput.stdout, 3000)}`);
       if (iter.evalOutput) {
-        lines.push(`EVAL: ${trunc(iter.evalOutput.stdout, 200)}`);
+        lines.push(`EVAL: ${trunc(iter.evalOutput.stdout, 3000)}`);
       }
       if (iter.feedback) {
-        lines.push(`Feedback: ${trunc(iter.feedback, 150)}`);
+        lines.push(`Feedback: ${trunc(iter.feedback, 2000)}`);
       }
       lines.push("");
     } else {

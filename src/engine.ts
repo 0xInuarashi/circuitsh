@@ -324,10 +324,10 @@ export async function executeCircuit(
           if (isDebug) {
             console.log(`  ${c.red}┌─ RUN FAILED (exit ${iterResult.runOutput.exitCode}) ──${c.reset}`);
             if (iterResult.runOutput.stdout) {
-              console.log(indent(iterResult.runOutput.stdout.slice(0, 3000), `  ${c.red}│${c.reset} `));
+              console.log(indent(iterResult.runOutput.stdout, `  ${c.red}│${c.reset} `));
             }
             if (iterResult.runOutput.stderr) {
-              console.log(indent(iterResult.runOutput.stderr.slice(0, 1000), `  ${c.red}│${c.reset} `));
+              console.log(indent(iterResult.runOutput.stderr, `  ${c.red}│${c.reset} `));
             }
             console.log(`  ${c.red}└──${c.reset}`);
           }
@@ -455,7 +455,7 @@ export async function executeCircuit(
     if (state.success) {
       stepsCompleted++;
       completedStepSummaries.push(
-        `Step ${stepIndex + 1} (${step.run.prompt.slice(0, 60)}): COMPLETED in ${state.iterations.length} iteration(s)`,
+        `Step ${stepIndex + 1} (${step.run.prompt}): COMPLETED in ${state.iterations.length} iteration(s)`,
       );
       console.log(`\n  ${c.green}${c.bold}Step ${stepIndex + 1} completed successfully${c.reset}`);
     } else {
@@ -637,7 +637,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   );
   if (isDebug) {
     const displayCmd = runCommand.map((a, i) =>
-      i === runCommand.length - 1 && a.length > 200 ? `"${a.slice(0, 100)}..."` : a
+      i === runCommand.length - 1 && a.length > 400 ? `"${a.slice(0, 200)}..."` : a
     ).join(" ");
     console.log(`\n  ${c.gray}┌─ BIN COMMAND ──${c.reset}`);
     console.log(`  ${c.gray}│${c.reset} ${c.dim}${displayCmd}${c.reset}`);
@@ -699,12 +699,12 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   if (isDebug && runOutput.exitCode !== 0) {
     if (runOutput.stdout) {
       console.log(`  ${c.red}┌─ RUN STDOUT ──${c.reset}`);
-      console.log(indent(runOutput.stdout.slice(0, 3000), `  ${c.red}│${c.reset} `));
+      console.log(indent(runOutput.stdout, `  ${c.red}│${c.reset} `));
       console.log(`  ${c.red}└──${c.reset}`);
     }
     if (runOutput.stderr) {
       console.log(`  ${c.red}┌─ RUN STDERR ──${c.reset}`);
-      console.log(indent(runOutput.stderr.slice(0, 1000), `  ${c.red}│${c.reset} `));
+      console.log(indent(runOutput.stderr, `  ${c.red}│${c.reset} `));
       console.log(`  ${c.red}└──${c.reset}`);
     }
   }
@@ -759,7 +759,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   );
   if (isDebug) {
     const displayCmd = evalCommand.map((a, i) =>
-      i === evalCommand.length - 1 && a.length > 200 ? `"${a.slice(0, 100)}..."` : a
+      i === evalCommand.length - 1 && a.length > 400 ? `"${a.slice(0, 200)}..."` : a
     ).join(" ");
     console.log(`\n  ${c.gray}┌─ EVAL BIN COMMAND ──${c.reset}`);
     console.log(`  ${c.gray}│${c.reset} ${c.dim}${displayCmd}${c.reset}`);
@@ -824,7 +824,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
       : c.red;
     console.log(`\n  ${verdictColor}┌─ VERDICT: ${verdict} ──${c.reset}`);
     if (feedback) {
-      console.log(indent(feedback.slice(0, 500), `  ${verdictColor}│${c.reset} `));
+      console.log(indent(feedback, `  ${verdictColor}│${c.reset} `));
     }
     console.log(`  ${verdictColor}└──${c.reset}`);
   }
@@ -904,7 +904,7 @@ function getDirectorySnapshot(dir: string): string {
       cwd: dir,
       encoding: "utf-8",
       timeout: 5000,
-    }).slice(0, 4000);
+    });
   } catch {
     return "(could not snapshot directory)";
   }
@@ -925,7 +925,7 @@ function getDirectoryDiff(dir: string): string {
         encoding: "utf-8",
         timeout: 5000,
       });
-      return fullDiff.slice(0, 8000);
+      return fullDiff;
     }
     return "";
   } catch {
@@ -941,7 +941,7 @@ function sanitizeId(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .slice(0, 40);
+    .slice(0, 60);
 }
 
 /**
@@ -1005,7 +1005,7 @@ async function expandWithRequestLoop(
       console.log(`\n  ${c.magenta}┌─ USER PROMPT (RUN) ──${c.reset}`);
       console.log(`  ${c.magenta}│${c.reset} ${userPrompt}`);
       if (expandOpts?.focus) {
-        console.log(`  ${c.magenta}│${c.reset} ${c.dim}FOCUS: ${expandOpts.focus.slice(0, 200)}${c.reset}`);
+        console.log(`  ${c.magenta}│${c.reset} ${c.dim}FOCUS: ${expandOpts.focus}${c.reset}`);
       }
       console.log(`  ${c.magenta}└──${c.reset}`);
     }
@@ -1040,7 +1040,7 @@ async function expandWithRequestLoop(
       const dump = (label: string, text: string, indent = 2) => {
         console.log(`  ${c.magenta}┌─ ${label} ──${c.reset}`);
         for (const line of text.split("\n")) {
-          console.log(`${" ".repeat(indent)}${c.magenta}│${c.reset} ${c.dim}${line.slice(0, 200)}${c.reset}`);
+          console.log(`${" ".repeat(indent)}${c.magenta}│${c.reset} ${c.dim}${line}${c.reset}`);
         }
         console.log(`  ${c.magenta}└──${c.reset}`);
       };
@@ -1050,28 +1050,22 @@ async function expandWithRequestLoop(
       console.log(`  ${c.magenta}╚═══════════════════════════════${c.reset}`);
 
       console.log(`  ${c.magenta}┌─ SYSTEM PROMPT ──${c.reset}`);
-      for (const line of systemPrompt.split("\n").slice(0, 30)) {
+      for (const line of systemPrompt.split("\n")) {
         console.log(`  ${c.magenta}│${c.reset} ${c.dim}${line}${c.reset}`);
-      }
-      if (systemPrompt.split("\n").length > 30) {
-        console.log(`  ${c.magenta}│${c.reset} ${c.dim}... (${systemPrompt.split("\n").length - 30} more lines)${c.reset}`);
       }
       console.log(`  ${c.magenta}└──${c.reset}`);
 
       console.log(`  ${c.magenta}┌─ FULL CONTEXT MESSAGE ──${c.reset}`);
       for (const line of userMessage.split("\n")) {
-        console.log(`  ${c.magenta}│${c.reset} ${c.dim}${line.slice(0, 200)}${c.reset}`);
+        console.log(`  ${c.magenta}│${c.reset} ${c.dim}${line}${c.reset}`);
       }
       console.log(`  ${c.magenta}└──${c.reset}`);
 
       if (reasoningBuffer.length > 0) {
         console.log(`  ${c.cyan}┌─ REASONING TRACE ──${c.reset}`);
         const reasoning = reasoningBuffer.join("");
-        for (const line of reasoning.split("\n").slice(0, 50)) {
-          console.log(`  ${c.cyan}│${c.reset} ${c.dim}${line.slice(0, 200)}${c.reset}`);
-        }
-        if (reasoning.split("\n").length > 50) {
-          console.log(`  ${c.cyan}│${c.reset} ${c.dim}... (${reasoning.split("\n").length - 50} more lines)${c.reset}`);
+        for (const line of reasoning.split("\n")) {
+          console.log(`  ${c.cyan}│${c.reset} ${c.dim}${line}${c.reset}`);
         }
         console.log(`  ${c.cyan}└──${c.reset}`);
       }
@@ -1080,7 +1074,7 @@ async function expandWithRequestLoop(
       if (engEntries.length > 0) {
         console.log(`  ${c.yellow}┌─ ENGINEER SCRATCHPAD UPDATES ──${c.reset}`);
         for (const [k, v] of engEntries) {
-          console.log(`  ${c.yellow}│${c.reset} ${c.dim}${k}: ${v.slice(0, 200)}${c.reset}`);
+          console.log(`  ${c.yellow}│${c.reset} ${c.dim}${k}: ${v}${c.reset}`);
         }
         console.log(`  ${c.yellow}└──${c.reset}`);
       }
