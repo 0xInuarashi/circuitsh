@@ -314,9 +314,24 @@ export async function executeCircuit(
         // Iteration completed — clear RUN expansion cache (next retry needs fresh expansion with new feedback)
         state.cachedRunExpansion = null;
 
-        // No EVAL — fire and forget
+        // No EVAL — check exit code to determine success
         if (!step.eval) {
-          state.success = true;
+          if (iterResult.runOutput.exitCode === 0) {
+            state.success = true;
+            break;
+          }
+          // Non-zero exit: dump debug info and fail
+          if (isDebug) {
+            console.log(`  ${c.red}┌─ RUN FAILED (exit ${iterResult.runOutput.exitCode}) ──${c.reset}`);
+            if (iterResult.runOutput.stdout) {
+              console.log(indent(iterResult.runOutput.stdout.slice(0, 3000), `  ${c.red}│${c.reset} `));
+            }
+            if (iterResult.runOutput.stderr) {
+              console.log(indent(iterResult.runOutput.stderr.slice(0, 1000), `  ${c.red}│${c.reset} `));
+            }
+            console.log(`  ${c.red}└──${c.reset}`);
+          }
+          state.success = false;
           break;
         }
 
@@ -653,12 +668,20 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     if (!runIsNewSession) {
       // --resume failed — session is corrupted, load recovery context and start fresh
       console.log(`  ${c.yellow}Session resume failed — loading recovery context for fresh session${c.reset}`);
-      state.recoveryContext = loadRecoveryContext(runDir, state.stepIndex, "run");
+      if (isDebug) {
+        const recovered = loadRecoveryContext(runDir, state.stepIndex, "run");
+        console.log(`  ${c.yellow}Recovery context: ${recovered ? `${recovered.length} chars loaded` : "none found"}${c.reset}`);
+      } else {
+        state.recoveryContext = loadRecoveryContext(runDir, state.stepIndex, "run");
+      }
       state.runSessionCreated = false;
       state.runSessionId = crypto.randomUUID();
     }
   } else if (runOutput.exitCode !== 0 && runOutput.rawStdout.length === 0) {
     // CLI failed before producing output — session may exist, try resume next
+    if (isDebug) {
+      console.log(`  ${c.yellow}BIN exited ${runOutput.exitCode} with no stdout — session may exist${c.reset}`);
+    }
     console.log(`  ${c.yellow}BIN failed before producing output — will try resuming session${c.reset}`);
     state.runSessionCreated = true;
   }
@@ -670,6 +693,20 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   if (cliOptions.raw) {
     rawLog("RUN STDOUT", runOutput.stdout);
     rawLog("RUN STDERR", runOutput.stderr);
+  }
+
+  // Dump RUN output in debug mode on non-zero exit
+  if (isDebug && runOutput.exitCode !== 0) {
+    if (runOutput.stdout) {
+      console.log(`  ${c.red}┌─ RUN STDOUT ──${c.reset}`);
+      console.log(indent(runOutput.stdout.slice(0, 3000), `  ${c.red}│${c.reset} `));
+      console.log(`  ${c.red}└──${c.reset}`);
+    }
+    if (runOutput.stderr) {
+      console.log(`  ${c.red}┌─ RUN STDERR ──${c.reset}`);
+      console.log(indent(runOutput.stderr.slice(0, 1000), `  ${c.red}│${c.reset} `));
+      console.log(`  ${c.red}└──${c.reset}`);
+    }
   }
 
   // ── If no EVAL, we're done ──
@@ -753,13 +790,22 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     if (!evalIsNewSession) {
       // --resume failed — session is corrupted, load recovery context and start fresh
       console.log(`  ${c.yellow}EVAL session resume failed — loading recovery context for fresh session${c.reset}`);
-      state.recoveryContext = loadRecoveryContext(runDir, state.stepIndex, "eval");
+      if (isDebug) {
+        const recovered = loadRecoveryContext(runDir, state.stepIndex, "eval");
+        console.log(`  ${c.yellow}Recovery context: ${recovered ? `${recovered.length} chars loaded` : "none found"}${c.reset}`);
+      } else {
+        state.recoveryContext = loadRecoveryContext(runDir, state.stepIndex, "eval");
+      }
       state.evalSessionCreated = false;
       state.evalSessionId = crypto.randomUUID();
     }
   } else if (evalOutput.exitCode !== 0 && evalOutput.rawStdout.length === 0) {
     // CLI failed before producing output — session may exist, try resume next
-    console.log(`  ${c.yellow}EVAL BIN failed before producing output — will try resuming session${c.reset}`);
+    if (isDebug) {
+      console.log(`  ${c.yellow}EVAL exited ${evalOutput.exitCode} with no stdout — session may exist${c.reset}`);
+    } else {
+      console.log(`  ${c.yellow}EVAL BIN failed before producing output — will try resuming session${c.reset}`);
+    }
     state.evalSessionCreated = true;
   }
 
