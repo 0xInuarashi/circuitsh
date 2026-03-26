@@ -1,14 +1,113 @@
-# DEFINES
-PROVIDER Openrouter # uses openrouter-compliant API
-API_KEY sk-abc-1234... # API key for PROVIDER
-PROMPT_ENGINEER_MODEL claude-sonnet-4-6 # prompt engineer model 
-RUN_BIN claude --dangerously-skip-permissions --effort max # Bin for RUN
-EVAL_BIN claude --dangerously-skip-permissions --effort max # Bin for EVAL
-DIR ~/autocompress
+# Circuit — AI Orchestration DSL
+# This file demonstrates every language feature and directive.
 
-# start of circuit and name of circuit
-CIRCUIT Make a new compression algorithmn from scratch: 
-  # RUN with a prompt, calls RUN_BIN
-  RUN Make a compression algorithmn from scratch in rust and validate its compression ratios. Our goal is to make the ratio over 99% for all types of text files. 
-  EVAL Evaluate the compression algorithmn and make sure that the ratios are as our goal.
-    RETRY 10 
+# ============================================================
+# LEVEL 0 — HEADER / DEFINES
+# ============================================================
+
+# Provider and API configuration
+PROVIDER Openrouter           # API provider (default: openrouter)
+API_KEY ${OPENROUTER_API_KEY} # API key — env var interpolation supported
+API_URL https://openrouter.ai/api/v1  # Optional custom endpoint
+
+# Prompt engineer model expands RUN/EVAL prompts into rich context
+PROMPT_ENGINEER_MODEL anthropic/claude-sonnet-4-6
+
+# ALIAS defines named shortcuts for bins; referenced by RUN_BIN, EVAL_BIN, and WITH
+ALIAS claude "claude --dangerously-skip-permissions --effort max"
+ALIAS aider "aider --no-auto-commits"
+ALIAS bench "./bench.sh"
+
+RUN_BIN claude          # Default bin for RUN steps
+EVAL_BIN claude         # Default bin for EVAL steps (falls back to RUN_BIN)
+
+DIR ~/projects/compress      # Working directory for all steps
+LOG_DIR .circuit-runs/      # JSONL run logs saved here
+CHECKPOINT on               # Git snapshot before each iteration
+TIMEOUT 3600                # Per-step timeout in seconds (0 = no limit)
+
+# Persistent context shared across all steps; backslash joins continuation lines
+CIRCUIT_CONTEXT "Building a high-ratio text compression tool in Rust. \
+  Target: >99% compression on diverse text corpora. No external crates."
+
+# ============================================================
+# CIRCUIT BLOCK — multi-step AI pipeline
+# ============================================================
+CIRCUIT Build compression tool:
+
+  # Step 1: RUN + EVAL — the core loop (auto-expansion via PROMPT_ENGINEER_MODEL)
+  RUN Implement a compression algorithm in Rust targeting >99% ratio
+  EVAL Verify compression ratio exceeds 99% on the test corpus
+    RETRY 10
+
+  # Step 2: RAW_RUN skips prompt expansion — prompt goes verbatim to the bin
+  # Single-line: everything after RAW_RUN is the prompt, WITH selects the bin
+  RAW_RUN "cargo test --release 2>&1" WITH bench
+  RAW_EVAL "cargo bench -- --output-format json" WITH bench
+    RETRY 3
+
+  # Step 3: EXPAND with custom model and FOCUS guidance — INTO: targets RUN
+  EXPAND AS "anthropic/claude-sonnet-4-6" \
+    FOR "Profile the hot path and identify bottlenecks" \
+    FOCUS "Rust profiling: perf, flamegraph, cachegrind. Optimize for p99 latency." \
+    INTO:
+    RUN WITH bench
+
+  # Step 4: RUN + EXPAND targeting EVAL — lets you swap the eval model
+  RUN Refactor the hottest functions for cache friendliness
+  EXPAND AS "anthropic/claude-sonnet-4-6" \
+    FOR "Confirm benchmarks show measurable speedup with no regression" \
+    FOCUS "Statistical significance: run 5 trials, compare means with p < 0.05" \
+    INTO:
+    EVAL WITH bench
+    ALLOW_REQUEST "perf instrumentation requires elevated permissions"
+    ALLOW_REQUEST "flamegraph generation may need graphviz installed"
+    NOTIFY ./notify.sh              # Fires when user input is requested
+    REQUEST_TIMEOUT 300             # Seconds to wait; 0 = wait forever
+    RETRY 5
+
+  # Step 5: WITH clause overrides the default bin for a single step
+  RUN "Add CLI flags for compression level (1-9)" WITH aider
+  EVAL "Bench all compression levels and report speed/ratio tradeoff" WITH bench
+    RETRY 3
+
+# ============================================================
+# SCRATCHPAD — agent-to-agent key/value communication
+# ============================================================
+# Agents write to the scratchpad in their output:
+#
+#   <scratchpad_set key="best_ratio">0.991</scratchpad_set>
+#
+# The prompt engineer can also write:
+#
+#   <engineer_scratchpad_set key="focus_area">dictionary encoding</engineer_scratchpad_set>
+#
+# Values persist across iterations within a step and are available
+# to subsequent RUN/EVAL prompts via the scratchpad context.
+
+# ============================================================
+# VERDICT PROTOCOL — how EVAL communicates pass/fail
+# ============================================================
+# EVAL bins must output one of:
+#
+#   <verdict>SUCCESS</verdict>   — step passes, advance to next step
+#   <verdict>FAILURE</verdict>   — step fails, retry with full output as feedback
+#
+# Case-insensitive. No tag defaults to FAILURE (safe default).
+# On FAILURE, the full EVAL output becomes the feedback prompt for the next RUN retry.
+
+# ============================================================
+# PERMISSION GATES — ALLOW_REQUEST / NOTIFY / REQUEST_TIMEOUT
+# ============================================================
+# When ALLOW_REQUEST conditions are present, the prompt engineer may emit:
+#
+#   <request_input key="descriptive_key" reason="matched condition">
+#   Message explaining what is needed from the user
+#   </request_input>
+#
+# NOTIFY fires a script with these env vars:
+#   CIRCUIT_REQUEST_REASON    — matched ALLOW_REQUEST condition
+#   CIRCUIT_REQUEST_MESSAGE   — prompt engineer's message
+#   CIRCUIT_REQUEST_KEY       — scratchpad key for the response
+#   CIRCUIT_NAME              — circuit name
+#   CIRCUIT_STEP              — step number (1-indexed)
