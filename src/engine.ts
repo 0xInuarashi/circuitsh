@@ -83,7 +83,45 @@ export async function executeCircuit(
     );
   }
 
-  const rawLogger = cliOptions.raw
+  // ── Human intervention via Ctrl+C ──
+  // References that get updated each step iteration
+  let currentState: StepState | null = null;
+  let ctrlCCount = 0;
+  let lastCtrlCTime = 0;
+
+  const handleSigInt = () => {
+    if (!currentState) return;
+    const now = Date.now();
+    if (now - lastCtrlCTime < 2000) {
+      ctrlCCount++;
+    } else {
+      ctrlCCount = 1;
+    }
+    lastCtrlCTime = now;
+
+    if (ctrlCCount >= 3) {
+      console.log(`\n\n  ${c.red}Interrupted — exiting circuit${c.reset}`);
+      currentState.killCurrentProcess?.();
+      process.exit(130);
+    }
+
+    currentState.killCurrentProcess?.();
+    currentState.interventionPending = true;
+    currentState.ctrlCCount = ctrlCCount;
+    console.log(`\n\n  ${c.yellow}Ctrl+C — intervention queued (press again to exit)${c.reset}`);
+  };
+
+  process.on("SIGINT", handleSigInt);
+
+  try {
+    // Setup complete
+  } catch {
+    process.removeListener("SIGINT", handleSigInt);
+    throw;
+  }
+
+  // Wrap entire circuit execution in try/finally to ensure listener cleanup
+  try {
     ? (label: string, data: string) => {
         console.log(`\n${c.gray}┌── RAW: ${label} ──${c.reset}`);
         console.log(`${c.gray}${data}${c.reset}`);
@@ -206,7 +244,10 @@ export async function executeCircuit(
       success: false,
       cachedRunExpansion: null,
       recoveryContext: null,
+      interventionPending: false,
+      ctrlCCount: 0,
     };
+    currentState = state;
 
     const maxRetries = step.eval?.retry ?? 0;
     const maxAttempts = maxRetries + 1;
@@ -216,7 +257,14 @@ export async function executeCircuit(
 
     for (let iteration = startIteration; iteration < maxAttempts; iteration++) {
       engineerLogContext = { stepIndex, iteration };
-      // Not a fresh session on resume — the session already exists from checkpoint
+
+      // Safe point: handle human intervention before expanding
+      if (state.interventionPending) {
+        await handleIntervention(state, circuit.name, stepIndex, iteration);
+        // After handling, continue to re-expand — don't count as retry
+      }
+
+      // Not a fresh session on resume or after intervention — the session already exists
       const isFirst = false;
 
       if (!isFirst) {
@@ -499,6 +547,9 @@ export async function executeCircuit(
   console.log(`${summaryColor}${"═".repeat(60)}${c.reset}`);
 
   return circuitSuccess;
+  } finally {
+    process.removeListener("SIGINT", handleSigInt);
+  }
 }
 
 // ── Internal ──
@@ -645,7 +696,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   }
 
   console.log(`  ${c.cyan}Running ${stepRunBin.split(" ")[0]}...${c.reset}`);
-  const runOutput = await runBin({
+  const runBinResult = runBin({
     adapter: runAdapter,
     binCommand: stepRunBin,
     prompt: runPrompt,
@@ -658,6 +709,9 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
       : undefined,
     onStderr: isDebug ? (c) => process.stderr.write(c) : undefined,
   });
+  state.killCurrentProcess = runBinResult.cancel;
+  const runOutput = await runBinResult.output;
+  state.killCurrentProcess = undefined; // RUN done, clear kill ref
 
   // Track session creation — if BIN produced output, session exists
   if (runOutput.exitCode !== null && runOutput.rawStdout.length > 0) {
@@ -766,8 +820,15 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     console.log(`  ${c.gray}└──${c.reset}`);
   }
 
+  // Safe point: handle human intervention before EVAL
+  if (state.interventionPending) {
+    await handleIntervention(state, circuit.name, stepIndex, iteration);
+    // Clear kill ref — RUN subprocess is already done
+    state.killCurrentProcess = undefined;
+  }
+
   console.log(`  ${c.cyan}Running EVAL...${c.reset}`);
-  const evalOutput = await runBin({
+  const evalBinResult = runBin({
     adapter: evalAdapter,
     binCommand: stepEvalBin,
     prompt: evalPrompt,
@@ -780,6 +841,9 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
       : undefined,
     onStderr: isDebug ? (c) => process.stderr.write(c) : undefined,
   });
+  state.killCurrentProcess = evalBinResult.cancel;
+  const evalOutput = await evalBinResult.output;
+  state.killCurrentProcess = undefined; // EVAL done, clear kill ref
 
   // Track session creation
   if (evalOutput.exitCode !== null && evalOutput.rawStdout.length > 0) {
@@ -1305,4 +1369,45 @@ function fireNotify(
   } catch {
     console.log(`  ${c.yellow}NOTIFY failed to spawn: ${command}${c.reset}`);
   }
+}
+
+/**
+ * Handle human intervention triggered by Ctrl+C.
+ * Prompts for a multi-line observation, injects it into the engineer scratchpad,
+ * and clears the intervention pending flag.
+ */
+async function handleIntervention(
+  state: StepState,
+  circuitName: string,
+  stepIndex: number,
+  iteration: number,
+): Promise<void> {
+  state.interventionPending = false;
+  const count = state.ctrlCCount;
+  state.ctrlCCount = 0;
+
+  console.log(`\n\n  ${c.bold}${c.yellow}┌─ HUMAN INTERVENTION ─────────────────────────────────────${c.reset}`);
+  console.log(`  ${c.yellow}│${c.reset}`);
+  console.log(`  ${c.yellow}│${c.reset}  ${c.bold}Step ${stepIndex + 1}, Iteration ${iteration + 1} — ${circuitName}${c.reset}`);
+  console.log(`  ${c.yellow}│${c.reset}`);
+  console.log(`  ${c.yellow}│${c.reset}  Enter your observation (${c.bold}Ctrl+D${c.reset}${c.yellow} or empty line to finish):${c.reset}`);
+  console.log(`  ${c.yellow}│${c.reset}`);
+
+  const input = await promptUser(
+    `  ${c.yellow}> ${c.reset}Enter your observation (Ctrl+D or empty line to finish):`,
+  );
+
+  const observation = (input ?? "").trim();
+  if (!observation) {
+    console.log(`  ${c.yellow}│${c.reset}  ${c.dim}Intervention cancelled — continuing${c.reset}`);
+    console.log(`  ${c.yellow}└────────────────────────────────────────────────────────${c.reset}`);
+    return;
+  }
+
+  const key = `human_intervention_${Date.now()}`;
+  state.engineerScratchpad[key] = observation;
+
+  console.log(`  ${c.yellow}└────────────────────────────────────────────────────────${c.reset}`);
+  console.log(`  ${c.green}✓${c.reset}  Intervention queued (${observation.length} chars)`);
+  console.log(`  ${c.dim}  The prompt engineer will see this observation before the next expansion.${c.reset}\n`);
 }

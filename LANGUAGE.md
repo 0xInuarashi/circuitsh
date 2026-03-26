@@ -344,6 +344,34 @@ Circuits checkpoint state to `LOG_DIR/<runId>/checkpoint.json` after each comple
 
 The checkpoint reflects the last *completed* iteration. The in-progress iteration re-executes with the agent session auto-resumed.
 
+## Human Intervention (Ctrl+C)
+
+At any point during circuit execution, Ctrl+C triggers human intervention:
+
+1. **Press Ctrl+C once**: Kills the running subprocess, queues the intervention, circuit continues
+2. **Press Ctrl+C again** (within 2s): Same — just queues once
+3. **Press Ctrl+C three times** (within 2s): Hard exit (`process.exit(130)`)
+
+When queued, the next safe point (before RUN expansion, before EVAL expansion) prompts for input:
+
+```
+  ┌─ HUMAN INTERVENTION ─────────────────────────────────────
+  │
+  │  Step 2, Iteration 3 — Build compression tool
+  │
+  │  Enter your observation (Ctrl+D or empty line to finish):
+  │
+  │  > The agent keeps creating new files instead of
+  │    modifying existing ones.
+  │
+  └────────────────────────────────────────────────────────
+  ✓  Intervention queued (78 chars)
+```
+
+The observation is injected into the engineer scratchpad as `human_intervention_<timestamp>`. The prompt engineer sees it in the next expansion under `YOUR OBSERVATIONS` — it is synthesized as guidance, not a directive.
+
+The subprocess is killed via SIGTERM (+ SIGKILL grace period). Sessions may be corrupted — the circuit will attempt to resume or start fresh on retry.
+
 ## Execution Model
 
 1. Steps execute sequentially within a CIRCUIT block

@@ -2,11 +2,17 @@ import { spawn } from "child_process";
 import type { BinOutput, SessionAdapter } from "./types.ts";
 import { BinNotFoundError, BinTimeoutError } from "./errors.ts";
 
+export interface RunBinResult {
+  output: Promise<BinOutput>;
+  cancel: () => void;
+}
+
 /**
  * Execute a BIN command via subprocess.
  * Streams stdout/stderr in real-time via callbacks.
+ * Returns an output promise and a cancel function.
  */
-export async function runBin(opts: {
+export function runBin(opts: {
   adapter: SessionAdapter;
   binCommand: string;
   prompt: string;
@@ -16,7 +22,7 @@ export async function runBin(opts: {
   timeoutMs: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
-}): Promise<BinOutput> {
+}): RunBinResult {
   const command = opts.adapter.buildCommand(
     opts.binCommand,
     opts.prompt,
@@ -32,8 +38,24 @@ export async function runBin(opts: {
 
   const startTime = Date.now();
 
-  return new Promise<BinOutput>((resolve, reject) => {
-    let proc;
+  let proc: ReturnType<typeof spawn> | null = null;
+  let resolved = false;
+  let cancelled = false;
+  let rejectFn: ((err: unknown) => void) | null = null;
+
+  const killTree = (signal: NodeJS.Signals) => {
+    if (!proc) return;
+    try {
+      // Kill the entire process group (negative PID)
+      process.kill(-proc.pid!, signal);
+    } catch {
+      try { proc.kill(signal); } catch { /* already dead */ }
+    }
+  };
+
+  const output = new Promise<BinOutput>((resolve, reject) => {
+    rejectFn = reject;
+
     try {
       proc = spawn(cmd, args, {
         cwd: opts.workingDir,
@@ -52,20 +74,17 @@ export async function runBin(opts: {
     let timedOut = false;
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
-    const killTree = (signal: NodeJS.Signals) => {
-      try {
-        // Kill the entire process group (negative PID)
-        process.kill(-proc.pid!, signal);
-      } catch {
-        try { proc.kill(signal); } catch { /* already dead */ }
-      }
+    const cancel = () => {
+      cancelled = true;
+      timedOut = true; // reuse flag to trigger rejection
+      killTree("SIGTERM");
+      setTimeout(() => killTree("SIGKILL"), 2000);
     };
 
     if (opts.timeoutMs > 0) {
       timeoutHandle = setTimeout(() => {
         timedOut = true;
         killTree("SIGTERM");
-        // Grace period then SIGKILL
         setTimeout(() => killTree("SIGKILL"), 5000);
       }, opts.timeoutMs);
     }
@@ -84,14 +103,17 @@ export async function runBin(opts: {
 
     proc.on("error", (err) => {
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (resolved || cancelled) return;
+      resolved = true;
       reject(new BinNotFoundError(`${opts.binCommand}: ${err.message}`));
     });
 
     proc.on("close", (exitCode) => {
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (resolved || cancelled) return;
+      resolved = true;
 
       const durationMs = Date.now() - startTime;
-
       const rawStdout = stdoutChunks.join("");
       const stderr = stderrChunks.join("");
 
@@ -116,4 +138,14 @@ export async function runBin(opts: {
       });
     });
   });
+
+  return {
+    output,
+    cancel: () => {
+      if (resolved) return;
+      cancelled = true;
+      killTree("SIGTERM");
+      setTimeout(() => killTree("SIGKILL"), 2000);
+    },
+  };
 }

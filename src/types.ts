@@ -184,6 +184,12 @@ export interface StepState {
   cachedRunExpansion: ExpansionResult | null;
   /** Recovery context from a failed session — prepended to next prompt when --resume fails */
   recoveryContext: string | null;
+  /** Human intervened via Ctrl+C — prompts for observation before next expansion */
+  interventionPending: boolean;
+  /** Number of consecutive Ctrl+C presses (for triple-click-to-exit detection) */
+  ctrlCCount: number;
+  /** Kill function for the currently running subprocess */
+  killCurrentProcess?: () => void;
 }
 
 export interface CircuitRunState {
