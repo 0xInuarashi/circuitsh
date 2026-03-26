@@ -12,31 +12,34 @@ import {
 // ── System Prompts ──
 
 const RUN_EXPANSION_SYSTEM = `\
-You are a prompt engineer inside the Circuit orchestration system. Your job is to expand \
-a terse task description into a rich, detailed prompt that will be sent to an AI coding agent.
+You are a mentor and guide inside the Circuit orchestration system. \
+Your job is NOT to write a specification or give instructions. \
+Your job is to help the agent understand the direction, the spirit of the \
+work, and the landscape of the problem — then get out of the way.
 
-You will receive structured context including the goal, task description, iteration state, \
-previous evaluation feedback, scratchpad state, working directory state, and execution history.
+A good mentor:
+- Sets context and direction, never tasks and instructions
+- Observes what happened and offers a perspective, never a prescription
+- Trusts the agent to figure out the how
+- On retries: frames the situation as a puzzle to explore, not a fix-list
+- Knows when to say less — silence is not a failure
 
-Your expanded prompt must:
-1. Clearly state the task with enough detail for the agent to execute it
-2. Incorporate any feedback from previous evaluation failures — be specific about what went wrong and what must change
-3. Reference relevant files/state from the working directory context
-4. Include the overall goal to prevent drift
-5. Be specific about success criteria so the agent can self-verify
-6. If this is a retry, emphasize what previously failed and direct the agent to take a different approach
-7. If retries are running low, signal urgency and suggest more creative/radical approaches
+Your expanded prompt must be SHORT. Often just the original prompt \
+with 1-2 sentences of directional framing. If the original is already \
+clear, add nothing. The agent needs room to think and create.
 
-If the context includes ALLOWED REQUEST CONDITIONS, you may request user input instead of \
-generating an expanded prompt when the failure clearly matches one of the listed conditions. \
-Only use this when the iteration would fail without information only the user can provide. Use:
+You will receive structured context. Use only what is relevant to \
+giving direction — do not dump everything into the prompt.
+
+If the context includes ALLOWED REQUEST CONDITIONS, you may request \
+user input instead of generating an expanded prompt when the failure \
+clearly matches one of the listed conditions. Use:
 <request_input key="descriptive_key" reason="matching condition">
 Your message to the user explaining what you need and why
 </request_input>
 Do NOT use request_input if no ALLOWED REQUEST CONDITIONS are listed.
 
-You may also update your own scratchpad to track meta-observations across iterations. \
-Use these tags in your response (outside the expanded_prompt tags):
+You may also update your own scratchpad to track observations:
 <engineer_scratchpad_set key="observation_name">your observation</engineer_scratchpad_set>
 
 Output your expanded prompt inside these tags:
@@ -45,37 +48,36 @@ Your expanded prompt here.
 </expanded_prompt>`;
 
 const EVAL_EXPANSION_SYSTEM = `\
-You are a prompt engineer inside the Circuit orchestration system. Your job is to expand \
-a terse evaluation description into a rigorous, detailed evaluation prompt that will be \
-sent to an AI evaluator agent.
+You are a mentor and guide inside the Circuit orchestration system. \
+Your job is NOT to write a detailed review document or checklist. \
+Your job is to help the evaluator understand what to look for and \
+why — then trust them to judge.
 
-You will receive structured context including the goal, evaluation criteria, iteration state, \
-eval history, working directory state, and execution history.
+A good mentor for an evaluator:
+- Points toward what matters without scripting the verdict
+- Shares observations about what stood out, not a todo list for fixes
+- Trusts the evaluator to form their own judgment
+- On retries: helps the evaluator see what they may have missed
 
-Your expanded prompt must:
-1. Clearly state the success criteria with specific, measurable checks
-2. Instruct the agent to examine concrete artifacts (files, test output, logs, etc.)
-3. Reference the working directory and what should have changed
-4. Be strict but fair in what constitutes success
-5. If previous evaluations found issues that were supposedly fixed, verify those specific fixes
+Your expanded prompt must be SHORT. Give the evaluator direction \
+and context, not a rubric. If the criteria are already clear, add nothing.
 
-If the context includes ALLOWED REQUEST CONDITIONS, you may request user input instead of \
-generating an expanded prompt when the failure clearly matches one of the listed conditions. \
-Only use this when evaluation cannot proceed without information only the user can provide. Use:
+If the context includes ALLOWED REQUEST CONDITIONS, you may request \
+user input when the evaluation cannot proceed without information \
+only the user can provide. Use:
 <request_input key="descriptive_key" reason="matching condition">
 Your message to the user explaining what you need and why
 </request_input>
 Do NOT use request_input if no ALLOWED REQUEST CONDITIONS are listed.
 
-The evaluation prompt MUST instruct the agent to end its response with exactly one of:
+The evaluation prompt MUST instruct the agent to end with exactly one of:
 <verdict>SUCCESS</verdict>
 <verdict>FAILURE</verdict>
 
-If the verdict is FAILURE, the evaluator MUST explain in detail what needs to change, \
-what specific criteria were not met, and provide actionable guidance.
+If the verdict is FAILURE, share your observations about what stood out \
+and what direction to explore — do not write a prescription or fix-list.
 
-You may also update your own scratchpad to track meta-observations across iterations. \
-Use these tags in your response (outside the expanded_prompt tags):
+You may also update your own scratchpad:
 <engineer_scratchpad_set key="observation_name">your observation</engineer_scratchpad_set>
 
 Output your expanded prompt inside these tags:
@@ -89,8 +91,8 @@ Please try again with the correct format.`;
 
 // ── Temperature Constants ──
 
-const TEMP_RUN_EXPANSION = 0.7;
-const TEMP_EVAL_EXPANSION = 0.3;
+const TEMP_RUN_EXPANSION = 0.35;
+const TEMP_EVAL_EXPANSION = 0.25;
 const TEMP_FORMAT_RETRY = 0.2;
 
 /**
@@ -133,7 +135,7 @@ export class Harness {
   ): Promise<ExpansionResult> {
     const userMessage = this.buildContextMessage(context);
     const systemPrompt = opts?.focus
-      ? `${RUN_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe above focus directive reflects the circuit author's domain-specific priorities and constraints. Ensure your expanded prompt steers the agent toward these specific concerns. On retries, reinforce these priorities with increasing emphasis.`
+      ? `${RUN_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe circuit author has flagged the above as a priority. Use it to inform your perspective, not to prescribe the agent's approach.`
       : RUN_EXPANSION_SYSTEM;
     return this.expand(
       "run_expand",
@@ -156,7 +158,7 @@ export class Harness {
   ): Promise<ExpansionResult> {
     const userMessage = this.buildContextMessage(context);
     const systemPrompt = opts?.focus
-      ? `${EVAL_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe above focus directive reflects the circuit author's domain-specific evaluation priorities. Ensure your expanded evaluation prompt tests for these specific concerns. Be strict about these criteria.`
+      ? `${EVAL_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe circuit author has flagged the above as a priority to keep in mind. Use it to inform your perspective, not to write a test rubric.`
       : EVAL_EXPANSION_SYSTEM;
     return this.expand(
       "eval_expand",
@@ -276,98 +278,52 @@ export class Harness {
   private buildContextMessage(context: ExpansionContext): string {
     const sections: string[] = [];
 
-    // Goal (always first — prevent drift)
     sections.push(`GOAL: ${context.goal}`);
-
-    // Role
     sections.push(`ROLE: ${context.role === "run" ? "Task Executor (RUN)" : "Evaluator (EVAL)"}`);
-
-    // User prompt
     sections.push(
       `${context.role === "run" ? "TASK" : "EVALUATION CRITERIA"}: ${context.userPrompt}`,
     );
-
-    // Iteration metadata
     sections.push(
       `ITERATION: ${context.iteration + 1} of ${context.maxRetries + 1}` +
         ` (${context.isFirst ? "first attempt" : `retry ${context.iteration}, ${context.maxRetries - context.iteration} retries remaining`})`,
     );
 
-    // EVAL feedback (RUN retries only)
     if (context.evalFeedback) {
+      sections.push(`PREVIOUS EVALUATION:\n${context.evalFeedback}`);
+    }
+
+    const engEntries = Object.entries(context.engineerScratchpad);
+    if (engEntries.length > 0) {
       sections.push(
-        `PREVIOUS EVALUATION FEEDBACK:\n${context.evalFeedback}`,
+        `YOUR OBSERVATIONS (from previous expansions):\n${engEntries.map(([k, v]) => `  ${k}: ${v}`).join("\n")}`,
       );
     }
 
-    // Eval history (EVAL role only)
-    if (context.evalHistory) {
-      sections.push(`EVAL HISTORY:\n${context.evalHistory}`);
-    }
-
-    // Scratchpad (BIN's) — label circuit_context entries distinctly
-    if (Object.keys(context.scratchpad).length > 0) {
-      const entries = Object.entries(context.scratchpad)
-        .map(([k, v]) =>
-          k.startsWith("circuit_context_")
-            ? `  [circuit_context] ${v}`
-            : `  ${k}: ${v}`,
-        )
-        .join("\n");
-      sections.push(`AGENT SCRATCHPAD:\n${entries}`);
-    }
-
-    // Engineer scratchpad
-    if (Object.keys(context.engineerScratchpad).length > 0) {
-      const entries = Object.entries(context.engineerScratchpad)
-        .map(([k, v]) => `  ${k}: ${v}`)
-        .join("\n");
-      sections.push(`YOUR SCRATCHPAD (from previous expansions):\n${entries}`);
-    }
-
-    // Working directory
-    if (context.isFirst && context.workingDirSnapshot) {
-      sections.push(
-        `WORKING DIRECTORY (${context.environment.cwd}):\n${context.workingDirSnapshot}`,
-      );
-    }
     if (context.workingDirDiff) {
-      sections.push(
-        `WORKING DIRECTORY CHANGES (since last iteration):\n${context.workingDirDiff}`,
-      );
+      sections.push(`WORKING DIRECTORY CHANGES (since last iteration):\n${context.workingDirDiff}`);
     }
 
-    // Step context (multi-step)
     if (context.stepContext) {
-      sections.push(`PREVIOUS STEPS COMPLETED:\n${context.stepContext}`);
+      sections.push(`PREVIOUS STEPS:\n${context.stepContext}`);
     }
 
-    // ALLOW_REQUEST conditions
-    if (context.allowRequests && context.allowRequests.length > 0) {
-      const conditions = context.allowRequests.map((c) => `  - ${c}`).join("\n");
+    if (context.allowRequests?.length) {
       sections.push(
-        `ALLOWED REQUEST CONDITIONS (you may request user input for these):\n${conditions}`,
+        `ALLOWED REQUEST CONDITIONS:\n${context.allowRequests.map((c) => `  - ${c}`).join("\n")}`,
       );
     }
 
-    // Environment + machine context
     const m = context.environment.machine;
     sections.push(
       `ENVIRONMENT:\n` +
-        `  os: ${context.environment.os}\n` +
-        `  shell: ${context.environment.shell}\n` +
-        `  working_directory: ${context.environment.cwd}\n` +
-        `  date: ${context.environment.date}\n` +
-        `  cpu: ${m.cpuModel} (${m.cpuCores} cores)\n` +
-        `  ram: ${m.ramFreeMB}MB free / ${m.ramTotalMB}MB total\n` +
-        `  disk: ${m.diskFreeGB}GB free / ${m.diskTotalGB}GB total\n` +
+        `  os: ${context.environment.os}, shell: ${context.environment.shell}\n` +
+        `  cwd: ${context.environment.cwd}\n` +
+        `  cpu: ${m.cpuModel} (${m.cpuCores} cores), ram: ${m.ramFreeMB}MB free\n` +
         `  gpu: ${m.gpu ?? "none"}`,
     );
 
-    // Execution history (compressed for context window, full available)
     if (context.executionHistory.length > 0) {
-      const historyStr = compressExecutionHistory(context.executionHistory);
-      sections.push(`EXECUTION HISTORY:\n${historyStr}`);
+      sections.push(`EXECUTION HISTORY:\n${compressExecutionHistory(context.executionHistory)}`);
     }
 
     return sections.join("\n\n");
@@ -376,16 +332,19 @@ export class Harness {
 
 /**
  * Compress execution history for the prompt engineer.
- * First 3 and last 3 iterations in full detail, middle compressed.
+ * First 2 and last 2 iterations in full detail, middle as one-liners.
  */
 function compressExecutionHistory(history: IterationResult[]): string {
   if (history.length === 0) return "No previous iterations.";
 
+  const trunc = (s: string, n: number) =>
+    s.length <= n ? s : s.slice(0, n) + "...";
+
   const lines: string[] = [];
 
   const fullIndices = new Set<number>();
-  for (let i = 0; i < Math.min(3, history.length); i++) fullIndices.add(i);
-  for (let i = Math.max(0, history.length - 3); i < history.length; i++)
+  for (let i = 0; i < Math.min(2, history.length); i++) fullIndices.add(i);
+  for (let i = Math.max(0, history.length - 2); i < history.length; i++)
     fullIndices.add(i);
 
   for (let i = 0; i < history.length; i++) {
@@ -394,18 +353,18 @@ function compressExecutionHistory(history: IterationResult[]): string {
 
     if (fullIndices.has(i)) {
       lines.push(`--- Iteration ${iter.iteration + 1} [${verdict}] ---`);
-      lines.push(`RUN prompt: ${iter.expandedRunPrompt.slice(0, 200)}...`);
-      lines.push(`RUN output (exit ${iter.runOutput.exitCode}): ${iter.runOutput.stdout.slice(0, 500)}`);
+      lines.push(`RUN: ${trunc(iter.expandedRunPrompt, 150)}`);
+      lines.push(`RUN output (exit ${iter.runOutput.exitCode}): ${trunc(iter.runOutput.stdout, 200)}`);
       if (iter.evalOutput) {
-        lines.push(`EVAL output: ${iter.evalOutput.stdout.slice(0, 500)}`);
+        lines.push(`EVAL: ${trunc(iter.evalOutput.stdout, 200)}`);
       }
       if (iter.feedback) {
-        lines.push(`Feedback: ${iter.feedback.slice(0, 300)}`);
+        lines.push(`Feedback: ${trunc(iter.feedback, 150)}`);
       }
       lines.push("");
     } else {
       lines.push(
-        `[Iteration ${iter.iteration + 1}] ${verdict} — RUN exit ${iter.runOutput.exitCode}, ${iter.feedback.slice(0, 80)}...`,
+        `[Iteration ${iter.iteration + 1}] ${verdict} — exit ${iter.runOutput.exitCode}`,
       );
     }
   }
