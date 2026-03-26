@@ -11,7 +11,7 @@ import {
 
 // ── System Prompts ──
 
-const RUN_EXPANSION_SYSTEM = `\
+export const RUN_EXPANSION_SYSTEM = `\
 You are a mentor and guide inside the Circuit orchestration system. \
 Your job is NOT to write a specification or give instructions. \
 Your job is to help the agent understand the direction, the spirit of the \
@@ -93,6 +93,8 @@ export class Harness {
     context: ExpansionContext,
     opts?: { modelOverride?: string; focus?: string },
     onChunk?: (text: string) => void,
+    onReasoningChunk?: (text: string) => void,
+    onResult?: (meta: { totalCostUsd: number | null; numTurns: number | null; durationMs: number | null }) => void,
   ): Promise<ExpansionResult> {
     const userMessage = this.buildContextMessage(context);
     const systemPrompt = opts?.focus
@@ -104,6 +106,8 @@ export class Harness {
       userMessage,
       TEMP_RUN_EXPANSION,
       onChunk,
+      onReasoningChunk,
+      onResult,
       opts?.modelOverride,
     );
   }
@@ -113,11 +117,14 @@ export class Harness {
     messages: { role: "system" | "user" | "assistant"; content: string }[],
     temperature: number,
     onChunk?: (text: string) => void,
+    onReasoningChunk?: (text: string) => void,
+    onResult?: (meta: { totalCostUsd: number | null; numTurns: number | null; durationMs: number | null }) => void,
   ): Promise<string> {
     const chunks: string[] = [];
-    for await (const chunk of this.client.stream(model, messages, temperature)) {
+    for await (const chunk of this.client.stream(model, messages, temperature, onResult)) {
       chunks.push(chunk.content);
       if (onChunk && chunk.content) onChunk(chunk.content);
+      if (onReasoningChunk && chunk.reasoning) onReasoningChunk(chunk.reasoning);
     }
     return chunks.join("");
   }
@@ -128,6 +135,8 @@ export class Harness {
     userMessage: string,
     temperature: number,
     onChunk?: (text: string) => void,
+    onReasoningChunk?: (text: string) => void,
+    onResult?: (meta: { totalCostUsd: number | null; numTurns: number | null; durationMs: number | null }) => void,
     modelOverride?: string,
   ): Promise<ExpansionResult> {
     const model = modelOverride ?? this.model;
@@ -138,7 +147,7 @@ export class Harness {
     ];
 
     // First attempt
-    const response = await this.streamComplete(model, messages, temperature, onChunk);
+    const response = await this.streamComplete(model, messages, temperature, onChunk, onReasoningChunk, onResult);
 
     let expandedPrompt = parseExpandedPrompt(response);
 
@@ -167,7 +176,7 @@ export class Harness {
       { role: "assistant", content: response },
       { role: "user", content: FORMAT_REMINDER },
     ];
-    const retryResponse = await this.streamComplete(model, retryMessages, TEMP_FORMAT_RETRY, onChunk);
+    const retryResponse = await this.streamComplete(model, retryMessages, TEMP_FORMAT_RETRY, onChunk, onReasoningChunk, onResult);
 
     expandedPrompt = parseExpandedPrompt(retryResponse);
     const combinedRaw = response + "\n\n--- FORMAT RETRY ---\n\n" + retryResponse;
@@ -213,7 +222,7 @@ export class Harness {
   /**
    * Build the full context message for the prompt engineer.
    */
-  private buildContextMessage(context: ExpansionContext): string {
+  buildContextMessage(context: ExpansionContext): string {
     const sections: string[] = [];
 
     sections.push(`GOAL: ${context.goal}`);

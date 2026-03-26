@@ -71,11 +71,13 @@ export class OpenRouterClient {
 
   /**
    * Streaming completion. Yields StreamChunk objects.
+   * Optionally calls onResult when the result metadata event is received.
    */
   async *stream(
     model: string,
     messages: Message[],
     temperature: number,
+    onResult?: (meta: { totalCostUsd: number | null; numTurns: number | null; durationMs: number | null; subtype: string | null }) => void,
   ): AsyncGenerator<StreamChunk> {
     const maxStreamRetries = 3;
 
@@ -109,6 +111,15 @@ export class OpenRouterClient {
 
             try {
               const data = JSON.parse(dataStr);
+              // Result metadata event
+              if (data.type === "result" && onResult) {
+                onResult({
+                  totalCostUsd: data.total_cost_usd ?? null,
+                  numTurns: data.num_turns ?? null,
+                  durationMs: data.duration_ms ?? null,
+                  subtype: data.subtype ?? null,
+                });
+              }
               const delta = data.choices?.[0]?.delta ?? {};
               const content = delta.content ?? "";
               const reasoning = delta.reasoning ?? "";

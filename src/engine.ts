@@ -13,7 +13,7 @@ import type {
   StepState,
 } from "./types.ts";
 import { OpenRouterClient } from "./client.ts";
-import { Harness, diagnoseTimeout } from "./harness.ts";
+import { Harness, diagnoseTimeout, RUN_EXPANSION_SYSTEM } from "./harness.ts";
 import { detectAdapter } from "./session.ts";
 import { runBin } from "./runner.ts";
 import { parseVerdict, parseScratchpadUpdates, parseRequestInput, type Verdict } from "./verdict.ts";
@@ -993,6 +993,12 @@ async function expandWithRequestLoop(
     : undefined;
   const expandModel = expandOpts?.modelOverride ?? config.promptEngineerModel;
 
+  // Build system prompt and context message for debug display
+  const systemPrompt = expandOpts?.focus
+    ? `${RUN_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${expandOpts.focus}\n\nThe circuit author has flagged the above as a priority. Use it to inform your perspective, not to prescribe the agent's approach.`
+    : RUN_EXPANSION_SYSTEM;
+  const userMessage = harness.buildContextMessage(context);
+
   // eslint-disable-next-line no-constant-condition
   while (true) {
     if (isDebug) {
@@ -1008,10 +1014,16 @@ async function expandWithRequestLoop(
       process.stdout.write(`\n  ${c.blue}┌─ EXPANDED RUN PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
     }
 
+    // Buffer reasoning and API metadata for debug display
+    const reasoningBuffer: string[] = [];
+    let apiMeta: { totalCostUsd: number | null; numTurns: number | null; durationMs: number | null } | null = null;
+
     const expansion = await harness.expandRun(
       context,
       expandOpts,
       isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+      isDebug ? (chunk: string) => reasoningBuffer.push(chunk) : undefined,
+      isDebug ? (meta) => { apiMeta = meta; } : undefined,
     );
 
     if (isDebug) {
@@ -1021,6 +1033,65 @@ async function expandWithRequestLoop(
     }
     if (cliOptions.raw) {
       rawLog("RAW ENGINEER RESPONSE (RUN)", expansion.rawResponse);
+    }
+
+    // Full debug dump after expansion completes
+    if (isDebug) {
+      const dump = (label: string, text: string, indent = 2) => {
+        console.log(`  ${c.magenta}┌─ ${label} ──${c.reset}`);
+        for (const line of text.split("\n")) {
+          console.log(`${" ".repeat(indent)}${c.magenta}│${c.reset} ${c.dim}${line.slice(0, 200)}${c.reset}`);
+        }
+        console.log(`  ${c.magenta}└──${c.reset}`);
+      };
+
+      console.log(`\n  ${c.magenta}╔═══════════════════════════════${c.reset}`);
+      console.log(`  ${c.magenta}║ ENGINEER DEBUG DUMP              ${c.reset}`);
+      console.log(`  ${c.magenta}╚═══════════════════════════════${c.reset}`);
+
+      console.log(`  ${c.magenta}┌─ SYSTEM PROMPT ──${c.reset}`);
+      for (const line of systemPrompt.split("\n").slice(0, 30)) {
+        console.log(`  ${c.magenta}│${c.reset} ${c.dim}${line}${c.reset}`);
+      }
+      if (systemPrompt.split("\n").length > 30) {
+        console.log(`  ${c.magenta}│${c.reset} ${c.dim}... (${systemPrompt.split("\n").length - 30} more lines)${c.reset}`);
+      }
+      console.log(`  ${c.magenta}└──${c.reset}`);
+
+      console.log(`  ${c.magenta}┌─ FULL CONTEXT MESSAGE ──${c.reset}`);
+      for (const line of userMessage.split("\n")) {
+        console.log(`  ${c.magenta}│${c.reset} ${c.dim}${line.slice(0, 200)}${c.reset}`);
+      }
+      console.log(`  ${c.magenta}└──${c.reset}`);
+
+      if (reasoningBuffer.length > 0) {
+        console.log(`  ${c.cyan}┌─ REASONING TRACE ──${c.reset}`);
+        const reasoning = reasoningBuffer.join("");
+        for (const line of reasoning.split("\n").slice(0, 50)) {
+          console.log(`  ${c.cyan}│${c.reset} ${c.dim}${line.slice(0, 200)}${c.reset}`);
+        }
+        if (reasoning.split("\n").length > 50) {
+          console.log(`  ${c.cyan}│${c.reset} ${c.dim}... (${reasoning.split("\n").length - 50} more lines)${c.reset}`);
+        }
+        console.log(`  ${c.cyan}└──${c.reset}`);
+      }
+
+      const engEntries = Object.entries(expansion.engineerScratchpadUpdates);
+      if (engEntries.length > 0) {
+        console.log(`  ${c.yellow}┌─ ENGINEER SCRATCHPAD UPDATES ──${c.reset}`);
+        for (const [k, v] of engEntries) {
+          console.log(`  ${c.yellow}│${c.reset} ${c.dim}${k}: ${v.slice(0, 200)}${c.reset}`);
+        }
+        console.log(`  ${c.yellow}└──${c.reset}`);
+      }
+
+      if (apiMeta) {
+        console.log(`  ${c.green}┌─ API METADATA ──${c.reset}`);
+        if (apiMeta.totalCostUsd !== null) console.log(`  ${c.green}│${c.reset} cost: $${apiMeta.totalCostUsd.toFixed(4)}`);
+        if (apiMeta.numTurns !== null) console.log(`  ${c.green}│${c.reset} turns: ${apiMeta.numTurns}`);
+        if (apiMeta.durationMs !== null) console.log(`  ${c.green}│${c.reset} duration: ${(apiMeta.durationMs / 1000).toFixed(1)}s`);
+        console.log(`  ${c.green}└──${c.reset}`);
+      }
     }
 
     // Check for request_input in the engineer's response
