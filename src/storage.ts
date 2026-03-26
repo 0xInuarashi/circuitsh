@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import type {
   CircuitConfig,
@@ -45,6 +45,7 @@ export function makeLogPaths(circuitName: string, logDir: string): {
   const runDir = join(logDir, base);
   mkdirSync(join(runDir, "raw"), { recursive: true });
   mkdirSync(join(runDir, "recovery"), { recursive: true });
+  mkdirSync(join(runDir, "engineer"), { recursive: true });
   return {
     jsonlPath: join(logDir, `${base}.jsonl`),
     runDir,
@@ -387,6 +388,68 @@ export function writeManifest(runDir: string, manifest: {
   writeFileSync(
     join(runDir, "manifest.json"),
     JSON.stringify(manifest, null, 2),
+    "utf-8",
+  );
+}
+
+// ── Prompt Engineer Logs ──
+
+export interface EngineerCallLog {
+  callType: "run_expand" | "eval_expand" | "timeout_diagnosis";
+  stepIndex: number;
+  iteration: number;
+  timestamp: string;
+  durationMs: number;
+  model: string;
+  temperature: number;
+  messages: Array<{ role: string; content: string }>;
+  rawOutput: string;
+  parsedResult: Record<string, unknown>;
+  formatRetried: boolean;
+}
+
+/**
+ * Write a prompt engineer call log to the engineer/ directory.
+ * Each call gets its own JSON file for full traceability.
+ * Returns the relative path within the run directory.
+ */
+export function writeEngineerCallLog(
+  runDir: string,
+  log: EngineerCallLog,
+): string {
+  const filename = `step${log.stepIndex}_iter${log.iteration}_${log.callType}.json`;
+  const filePath = join(runDir, "engineer", filename);
+
+  // Avoid overwriting (e.g., re-expansion after request_input) — append sequence number
+  let finalPath = filePath;
+  let seq = 0;
+  while (existsSync(finalPath)) {
+    seq++;
+    finalPath = join(runDir, "engineer", `step${log.stepIndex}_iter${log.iteration}_${log.callType}_${seq}.json`);
+  }
+
+  writeFileSync(finalPath, JSON.stringify(log, null, 2), "utf-8");
+  return finalPath.slice(runDir.length + 1); // relative path
+}
+
+/**
+ * Append a raw API traffic event to the engineer/api_traffic.jsonl file.
+ * Captures all SSE chunks, HTTP status codes, retries, errors — everything
+ * the OpenRouterClient sees at the wire level.
+ */
+export function appendApiTrafficLog(
+  runDir: string,
+  label: string,
+  data: string,
+): void {
+  const event = {
+    timestamp: new Date().toISOString(),
+    label,
+    data,
+  };
+  appendFileSync(
+    join(runDir, "engineer", "api_traffic.jsonl"),
+    JSON.stringify(event) + "\n",
     "utf-8",
   );
 }

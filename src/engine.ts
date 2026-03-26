@@ -28,6 +28,8 @@ import {
   writeSessionRecoveryDoc,
   formatRecoveryContext,
   writeManifest,
+  writeEngineerCallLog,
+  appendApiTrafficLog,
 } from "./storage.ts";
 import type { SessionRecoveryDoc } from "./types.ts";
 import { join } from "path";
@@ -66,10 +68,6 @@ export async function executeCircuit(
         console.log(`${c.gray}└── END: ${label} ──${c.reset}\n`);
       }
     : null;
-  const client = new OpenRouterClient(config.apiKey, config.apiUrl, rawLogger);
-  const harness = new Harness(client, config.promptEngineerModel);
-  const env = getEnvironment(config);
-
   // Ensure working directory exists
   if (!existsSync(config.dir)) {
     mkdirSync(config.dir, { recursive: true });
@@ -80,6 +78,34 @@ export async function executeCircuit(
   validateBins(circuit, config);
 
   const { jsonlPath: logPath, runDir } = makeLogPaths(circuit.name, config.logDir);
+
+  // Disk logger — always active, writes all API traffic to engineer/api_traffic.jsonl
+  const diskLogger = (label: string, data: string) => {
+    appendApiTrafficLog(runDir, label, data);
+  };
+
+  const client = new OpenRouterClient(config.apiKey, config.apiUrl, rawLogger, diskLogger);
+  const harness = new Harness(client, config.promptEngineerModel);
+  const env = getEnvironment(config);
+
+  // Engineer call logger — tracks step/iteration context for file naming
+  let engineerLogContext = { stepIndex: 0, iteration: 0 };
+  harness.setLogger((log) => {
+    writeEngineerCallLog(runDir, {
+      callType: log.callType,
+      stepIndex: engineerLogContext.stepIndex,
+      iteration: engineerLogContext.iteration,
+      timestamp: new Date().toISOString(),
+      durationMs: log.durationMs,
+      model: log.model,
+      temperature: log.temperature,
+      messages: log.messages,
+      rawOutput: log.rawOutput,
+      parsedResult: log.parsedResult,
+      formatRetried: log.formatRetried,
+    });
+  });
+
   logCircuitStart(logPath, circuit.name, config, circuit.steps);
 
   const startTime = Date.now();
@@ -143,6 +169,7 @@ export async function executeCircuit(
     const maxAttempts = maxRetries + 1;
 
     for (let iteration = 0; iteration < maxAttempts; iteration++) {
+      engineerLogContext = { stepIndex, iteration };
       const isFirst = iteration === 0;
 
       if (!isFirst) {
@@ -293,6 +320,20 @@ export async function executeCircuit(
             maxRetries,
             goal: circuit.name,
             userPrompt: step.run.prompt,
+          }, (log) => {
+            writeEngineerCallLog(runDir, {
+              callType: "timeout_diagnosis",
+              stepIndex: state.stepIndex,
+              iteration,
+              timestamp: new Date().toISOString(),
+              durationMs: log.durationMs,
+              model: log.model,
+              temperature: log.temperature,
+              messages: log.messages,
+              rawOutput: log.rawOutput,
+              parsedResult: log.parsedResult,
+              formatRetried: false,
+            });
           });
 
           console.log(`  ${c.cyan}Engineer decision: ${c.bold}${diagnosis.action}${c.reset}`);

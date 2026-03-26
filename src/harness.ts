@@ -97,13 +97,29 @@ const TEMP_FORMAT_RETRY = 0.2;
  * The Harness expands terse user prompts into rich, context-aware prompts
  * using the Prompt Engineer Model.
  */
+export type EngineerCallLogger = (log: {
+  callType: "run_expand" | "eval_expand" | "timeout_diagnosis";
+  model: string;
+  temperature: number;
+  messages: Array<{ role: string; content: string }>;
+  rawOutput: string;
+  parsedResult: Record<string, unknown>;
+  durationMs: number;
+  formatRetried: boolean;
+}) => void;
+
 export class Harness {
   private client: OpenRouterClient;
   private model: string;
+  private onLog: EngineerCallLogger | null = null;
 
   constructor(client: OpenRouterClient, model: string) {
     this.client = client;
     this.model = model;
+  }
+
+  setLogger(logger: EngineerCallLogger): void {
+    this.onLog = logger;
   }
 
   /**
@@ -120,6 +136,7 @@ export class Harness {
       ? `${RUN_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe above focus directive reflects the circuit author's domain-specific priorities and constraints. Ensure your expanded prompt steers the agent toward these specific concerns. On retries, reinforce these priorities with increasing emphasis.`
       : RUN_EXPANSION_SYSTEM;
     return this.expand(
+      "run_expand",
       systemPrompt,
       userMessage,
       TEMP_RUN_EXPANSION,
@@ -142,6 +159,7 @@ export class Harness {
       ? `${EVAL_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe above focus directive reflects the circuit author's domain-specific evaluation priorities. Ensure your expanded evaluation prompt tests for these specific concerns. Be strict about these criteria.`
       : EVAL_EXPANSION_SYSTEM;
     return this.expand(
+      "eval_expand",
       systemPrompt,
       userMessage,
       TEMP_EVAL_EXPANSION,
@@ -165,6 +183,7 @@ export class Harness {
   }
 
   private async expand(
+    callType: "run_expand" | "eval_expand",
     systemPrompt: string,
     userMessage: string,
     temperature: number,
@@ -172,55 +191,82 @@ export class Harness {
     modelOverride?: string,
   ): Promise<ExpansionResult> {
     const model = modelOverride ?? this.model;
+    const callStart = Date.now();
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ];
+
     // First attempt
-    const response = await this.streamComplete(
-      model,
-      [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-      temperature,
-      onChunk,
-    );
+    const response = await this.streamComplete(model, messages, temperature, onChunk);
 
     let expandedPrompt = parseExpandedPrompt(response);
 
     if (expandedPrompt) {
-      return {
+      const result: ExpansionResult = {
         expandedPrompt,
         engineerScratchpadUpdates: parseEngineerScratchpadUpdates(response),
         rawResponse: response,
       };
+      this.onLog?.({
+        callType,
+        model,
+        temperature,
+        messages,
+        rawOutput: response,
+        parsedResult: { expandedPrompt, engineerScratchpadUpdates: result.engineerScratchpadUpdates },
+        durationMs: Date.now() - callStart,
+        formatRetried: false,
+      });
+      return result;
     }
 
     // Format retry
-    const retryResponse = await this.streamComplete(
-      model,
-      [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-        { role: "assistant", content: response },
-        { role: "user", content: FORMAT_REMINDER },
-      ],
-      TEMP_FORMAT_RETRY,
-      onChunk,
-    );
+    const retryMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      ...messages,
+      { role: "assistant", content: response },
+      { role: "user", content: FORMAT_REMINDER },
+    ];
+    const retryResponse = await this.streamComplete(model, retryMessages, TEMP_FORMAT_RETRY, onChunk);
 
     expandedPrompt = parseExpandedPrompt(retryResponse);
+    const combinedRaw = response + "\n\n--- FORMAT RETRY ---\n\n" + retryResponse;
 
     if (expandedPrompt) {
-      return {
+      const result: ExpansionResult = {
         expandedPrompt,
         engineerScratchpadUpdates: parseEngineerScratchpadUpdates(retryResponse),
-        rawResponse: response + "\n\n--- FORMAT RETRY ---\n\n" + retryResponse,
+        rawResponse: combinedRaw,
       };
+      this.onLog?.({
+        callType,
+        model,
+        temperature,
+        messages: retryMessages,
+        rawOutput: combinedRaw,
+        parsedResult: { expandedPrompt, engineerScratchpadUpdates: result.engineerScratchpadUpdates },
+        durationMs: Date.now() - callStart,
+        formatRetried: true,
+      });
+      return result;
     }
 
     // Graceful degradation: use raw response as prompt
+    const degradedRaw = response + "\n\n--- FORMAT RETRY (degraded) ---\n\n" + retryResponse;
+    this.onLog?.({
+      callType,
+      model,
+      temperature,
+      messages: retryMessages,
+      rawOutput: degradedRaw,
+      parsedResult: { degraded: true },
+      durationMs: Date.now() - callStart,
+      formatRetried: true,
+    });
     return {
       expandedPrompt: retryResponse.trim() || response.trim(),
       engineerScratchpadUpdates: {},
-      rawResponse: response + "\n\n--- FORMAT RETRY (degraded) ---\n\n" + retryResponse,
+      rawResponse: degradedRaw,
     };
   }
 
@@ -404,6 +450,7 @@ export async function diagnoseTimeout(
     goal: string;
     userPrompt: string;
   },
+  onLog?: EngineerCallLogger,
 ): Promise<TimeoutDiagnosis> {
   const message = `\
 A ${opts.role.toUpperCase()} BIN timed out after ${opts.timeoutMs / 1000}s.
@@ -421,15 +468,14 @@ ${opts.partialStderr.slice(-1500)}
 
 What should we do?`;
 
+  const callStart = Date.now();
+  const messages: Array<{ role: "system" | "user"; content: string }> = [
+    { role: "system", content: TIMEOUT_DIAGNOSIS_SYSTEM },
+    { role: "user", content: message },
+  ];
+
   try {
-    const response = await client.complete(
-      model,
-      [
-        { role: "system", content: TIMEOUT_DIAGNOSIS_SYSTEM },
-        { role: "user", content: message },
-      ],
-      0.2,
-    );
+    const response = await client.complete(model, messages, 0.2);
 
     const actionMatch = response.match(/<timeout_action>(.*?)<\/timeout_action>/s);
     const reasonMatch = response.match(/<timeout_reason>(.*?)<\/timeout_reason>/s);
@@ -441,11 +487,42 @@ What should we do?`;
 
     // Validate action
     if (!["resume", "retry", "increase_timeout", "abort"].includes(action)) {
+      onLog?.({
+        callType: "timeout_diagnosis",
+        model,
+        temperature: 0.2,
+        messages,
+        rawOutput: response,
+        parsedResult: { action, reason: `Unknown action "${action}", defaulting to retry` },
+        durationMs: Date.now() - callStart,
+        formatRetried: false,
+      });
       return { action: "retry", reason: `Unknown action "${action}", defaulting to retry` };
     }
 
+    onLog?.({
+      callType: "timeout_diagnosis",
+      model,
+      temperature: 0.2,
+      messages,
+      rawOutput: response,
+      parsedResult: { action, reason, suggestedTimeoutMs },
+      durationMs: Date.now() - callStart,
+      formatRetried: false,
+    });
+
     return { action, reason, suggestedTimeoutMs };
   } catch {
+    onLog?.({
+      callType: "timeout_diagnosis",
+      model,
+      temperature: 0.2,
+      messages,
+      rawOutput: "(diagnosis failed)",
+      parsedResult: { action: "resume", reason: "Diagnosis failed, defaulting to resume", error: true },
+      durationMs: Date.now() - callStart,
+      formatRetried: false,
+    });
     // If diagnosis itself fails, default to resume (optimistic)
     return { action: "resume", reason: "Diagnosis failed, defaulting to resume" };
   }

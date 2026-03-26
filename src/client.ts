@@ -29,21 +29,27 @@ export class OpenRouterClient {
   private apiKey: string;
   private baseUrl: string;
   private rawLogger: RawLogger | null;
+  private diskLogger: RawLogger | null;
 
   constructor(
     apiKey: string,
     baseUrl: string = OPENROUTER_BASE,
     rawLogger: RawLogger | null = null,
+    diskLogger: RawLogger | null = null,
   ) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.rawLogger = rawLogger;
+    this.diskLogger = diskLogger;
   }
 
   private raw(label: string, data: unknown): void {
+    const str = typeof data === "string" ? data : JSON.stringify(data, null, 2);
     if (this.rawLogger) {
-      const str = typeof data === "string" ? data : JSON.stringify(data, null, 2);
       this.rawLogger(label, str);
+    }
+    if (this.diskLogger) {
+      this.diskLogger(label, str);
     }
   }
 
