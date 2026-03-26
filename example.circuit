@@ -10,7 +10,8 @@ PROVIDER Openrouter           # API provider (default: openrouter)
 API_KEY ${OPENROUTER_API_KEY} # API key — env var interpolation supported
 API_URL https://openrouter.ai/api/v1  # Optional custom endpoint
 
-# Prompt engineer model expands RUN/EVAL prompts into rich context
+# Prompt engineer model expands RUN prompts into rich context
+# EVAL always receives the prompt verbatim — no expansion
 PROMPT_ENGINEER_MODEL anthropic/claude-sonnet-4-6
 
 # ALIAS defines named shortcuts for bins; referenced by RUN_BIN, EVAL_BIN, and WITH
@@ -53,13 +54,9 @@ CIRCUIT Build compression tool:
     INTO:
     RUN WITH bench
 
-  # Step 4: RUN + EXPAND targeting EVAL — lets you swap the eval model
+  # Step 4: RUN + EVAL with permission gates — EVAL gets the prompt verbatim
   RUN Refactor the hottest functions for cache friendliness
-  EXPAND AS "anthropic/claude-sonnet-4-6" \
-    FOR "Confirm benchmarks show measurable speedup with no regression" \
-    FOCUS "Statistical significance: run 5 trials, compare means with p < 0.05" \
-    INTO:
-    EVAL WITH bench
+  EVAL Confirm benchmarks show measurable speedup with no regression WITH bench
     ALLOW_REQUEST "perf instrumentation requires elevated permissions"
     ALLOW_REQUEST "flamegraph generation may need graphviz installed"
     NOTIFY ./notify.sh              # Fires when user input is requested
@@ -78,12 +75,12 @@ CIRCUIT Build compression tool:
 #
 #   <scratchpad_set key="best_ratio">0.991</scratchpad_set>
 #
-# The prompt engineer can also write:
+# The prompt engineer (for RUN expansion) can also write:
 #
 #   <engineer_scratchpad_set key="focus_area">dictionary encoding</engineer_scratchpad_set>
 #
 # Values persist across iterations within a step and are available
-# to subsequent RUN/EVAL prompts via the scratchpad context.
+# to subsequent RUN prompts via the scratchpad context.
 
 # ============================================================
 # VERDICT PROTOCOL — how EVAL communicates pass/fail

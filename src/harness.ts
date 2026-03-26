@@ -47,44 +47,6 @@ Output your expanded prompt inside these tags:
 Your expanded prompt here.
 </expanded_prompt>`;
 
-const EVAL_EXPANSION_SYSTEM = `\
-You are a mentor and guide inside the Circuit orchestration system. \
-Your job is NOT to write a detailed review document or checklist. \
-Your job is to help the evaluator understand what to look for and \
-why — then trust them to judge.
-
-A good mentor for an evaluator:
-- Points toward what matters without scripting the verdict
-- Shares observations about what stood out, not a todo list for fixes
-- Trusts the evaluator to form their own judgment
-- On retries: helps the evaluator see what they may have missed
-
-Your expanded prompt must be SHORT. Give the evaluator direction \
-and context, not a rubric. If the criteria are already clear, add nothing.
-
-If the context includes ALLOWED REQUEST CONDITIONS, you may request \
-user input when the evaluation cannot proceed without information \
-only the user can provide. Use:
-<request_input key="descriptive_key" reason="matching condition">
-Your message to the user explaining what you need and why
-</request_input>
-Do NOT use request_input if no ALLOWED REQUEST CONDITIONS are listed.
-
-The evaluation prompt MUST instruct the agent to end with exactly one of:
-<verdict>SUCCESS</verdict>
-<verdict>FAILURE</verdict>
-
-If the verdict is FAILURE, share your observations about what stood out \
-and what direction to explore — do not write a prescription or fix-list.
-
-You may also update your own scratchpad:
-<engineer_scratchpad_set key="observation_name">your observation</engineer_scratchpad_set>
-
-Output your expanded prompt inside these tags:
-<expanded_prompt>
-Your expanded prompt here.
-</expanded_prompt>`;
-
 const FORMAT_REMINDER = `\
 IMPORTANT: You must output your expanded prompt inside <expanded_prompt>...</expanded_prompt> tags. \
 Please try again with the correct format.`;
@@ -92,7 +54,6 @@ Please try again with the correct format.`;
 // ── Temperature Constants ──
 
 const TEMP_RUN_EXPANSION = 0.35;
-const TEMP_EVAL_EXPANSION = 0.25;
 const TEMP_FORMAT_RETRY = 0.2;
 
 /**
@@ -100,7 +61,7 @@ const TEMP_FORMAT_RETRY = 0.2;
  * using the Prompt Engineer Model.
  */
 export type EngineerCallLogger = (log: {
-  callType: "run_expand" | "eval_expand" | "timeout_diagnosis";
+  callType: "run_expand" | "timeout_diagnosis";
   model: string;
   temperature: number;
   messages: Array<{ role: string; content: string }>;
@@ -147,29 +108,6 @@ export class Harness {
     );
   }
 
-  /**
-   * Expand an EVAL prompt with full context.
-   * Optional model/focus override from EXPAND directive.
-   */
-  async expandEval(
-    context: ExpansionContext,
-    opts?: { modelOverride?: string; focus?: string },
-    onChunk?: (text: string) => void,
-  ): Promise<ExpansionResult> {
-    const userMessage = this.buildContextMessage(context);
-    const systemPrompt = opts?.focus
-      ? `${EVAL_EXPANSION_SYSTEM}\n\n## Domain Focus (from circuit author)\n\n${opts.focus}\n\nThe circuit author has flagged the above as a priority to keep in mind. Use it to inform your perspective, not to write a test rubric.`
-      : EVAL_EXPANSION_SYSTEM;
-    return this.expand(
-      "eval_expand",
-      systemPrompt,
-      userMessage,
-      TEMP_EVAL_EXPANSION,
-      onChunk,
-      opts?.modelOverride,
-    );
-  }
-
   private async streamComplete(
     model: string,
     messages: { role: "system" | "user" | "assistant"; content: string }[],
@@ -185,7 +123,7 @@ export class Harness {
   }
 
   private async expand(
-    callType: "run_expand" | "eval_expand",
+    callType: "run_expand",
     systemPrompt: string,
     userMessage: string,
     temperature: number,

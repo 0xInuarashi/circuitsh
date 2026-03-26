@@ -161,7 +161,6 @@ export async function executeCircuit(
       iterations: [],
       success: false,
       cachedRunExpansion: null,
-      cachedEvalExpansion: null,
       recoveryContext: null,
     };
 
@@ -252,9 +251,8 @@ export async function executeCircuit(
 
         totalIterations++;
 
-        // Iteration completed — clear expansion caches (next retry needs fresh expansion with new feedback)
+        // Iteration completed — clear RUN expansion cache (next retry needs fresh expansion with new feedback)
         state.cachedRunExpansion = null;
-        state.cachedEvalExpansion = null;
 
         // No EVAL — fire and forget
         if (!step.eval) {
@@ -477,17 +475,6 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
       : null;
   const evalFeedback = lastIteration?.feedback ?? null;
 
-  // Build eval history for EVAL expansion
-  const evalHistory =
-    state.iterations.length > 0
-      ? state.iterations
-          .map(
-            (it) =>
-              `Iteration ${it.iteration + 1}: ${it.verdict ?? "NO_EVAL"} — ${it.feedback.slice(0, 100)}`,
-          )
-          .join("\n")
-      : null;
-
   // ── Expand RUN prompt ──
   const runContext: ExpansionContext = {
     role: "run",
@@ -538,7 +525,6 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     // auto or custom expansion — may loop if request_input is triggered
     runExpansion = await expandWithRequestLoop(
       harness,
-      "run",
       runContext,
       step.run.expansion,
       step.run.allowRequests,
@@ -647,69 +633,16 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     };
   }
 
-  // ── Expand EVAL prompt ──
-  const evalDiff = getDirectoryDiff(config.dir);
-
-  const evalContext: ExpansionContext = {
-    role: "eval",
-    goal: circuit.name,
-    userPrompt: step.eval.prompt,
-    iteration,
-    maxRetries,
-    isFirst,
-    evalFeedback: null,
-    scratchpad: { ...state.scratchpad },
-    engineerScratchpad: { ...state.engineerScratchpad },
-    workingDirSnapshot: "",
-    workingDirDiff: evalDiff,
-    environment: env,
-    stepContext:
-      completedStepSummaries.length > 0
-        ? completedStepSummaries.join("\n")
-        : null,
-    evalHistory,
-    executionHistory: state.iterations,
-    allowRequests: step.eval.allowRequests,
-  };
-
-  // ── Expand EVAL prompt (or skip for raw) ──
-  let evalExpansion: ExpansionResult;
+  // ── EVAL: no expansion — prompt goes straight to BIN ──
   const evalExpMode = step.eval.expansion;
-
-  if (evalExpMode === "raw") {
-    // RAW_EVAL — no expansion, pass prompt directly
-    evalExpansion = {
-      expandedPrompt: step.eval.prompt,
-      engineerScratchpadUpdates: {},
-      rawResponse: "",
-    };
-    console.log(`  ${c.dim}RAW_EVAL — skipping expansion (${step.eval.prompt.length} chars)${c.reset}`);
-  } else if (state.cachedEvalExpansion) {
-    evalExpansion = state.cachedEvalExpansion;
-    state.cachedEvalExpansion = null;
-    console.log(`  ${c.dim}Reusing cached EVAL expansion (${evalExpansion.expandedPrompt.length} chars)${c.reset}`);
-  } else {
-    // auto or custom expansion — may loop if request_input is triggered
-    evalExpansion = await expandWithRequestLoop(
-      harness,
-      "eval",
-      evalContext,
-      step.eval.expansion,
-      step.eval.allowRequests,
-      state,
-      config,
-      cliOptions,
-      isDebug,
-      isVerbose,
-      step.eval.prompt,
-      { notify: step.eval.notify, requestTimeout: step.eval.requestTimeout, circuitName: circuit.name, stepIndex: state.stepIndex },
-    );
-  }
-
-  // Cache expansion in case BIN fails and we need to retry
-  state.cachedEvalExpansion = evalExpansion;
-
-  Object.assign(state.engineerScratchpad, evalExpansion.engineerScratchpadUpdates);
+  const evalExpansion: ExpansionResult = {
+    expandedPrompt: step.eval.prompt,
+    engineerScratchpadUpdates: {},
+    rawResponse: "",
+  };
+  console.log(
+    `  ${c.dim}${evalExpMode === "raw" ? "RAW_" : ""}EVAL — no expansion (${step.eval.prompt.length} chars)${c.reset}`,
+  );
 
   // ── Execute EVAL_BIN ──
   // Inject recovery context if we had to abandon a previous session
@@ -805,7 +738,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     feedback,
     scratchpad: { ...state.scratchpad },
     engineerScratchpad: { ...state.engineerScratchpad },
-    workingDirDiff: evalDiff,
+    workingDirDiff,
     durationMs: Date.now() - iterStart,
     timestamp: new Date().toISOString(),
   };
@@ -931,13 +864,12 @@ function makeStreamHandler(
 }
 
 /**
- * Expand a prompt with request_input loop support.
+ * Expand a RUN prompt with request_input loop support.
  * If the prompt engineer emits <request_input> and the step has ALLOW_REQUEST conditions,
  * prompt the user, store input in scratchpad, and re-expand.
  */
 async function expandWithRequestLoop(
   harness: Harness,
-  role: "run" | "eval",
   context: ExpansionContext,
   expansionMode: import("./types.ts").ExpansionMode,
   allowRequests: string[] | undefined,
@@ -953,42 +885,35 @@ async function expandWithRequestLoop(
     ? { modelOverride: expansionMode.model, focus: expansionMode.focus }
     : undefined;
   const expandModel = expandOpts?.modelOverride ?? config.promptEngineerModel;
-  const roleLabel = role.toUpperCase();
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
     if (isDebug) {
-      console.log(`\n  ${c.magenta}┌─ USER PROMPT (${roleLabel}) ──${c.reset}`);
+      console.log(`\n  ${c.magenta}┌─ USER PROMPT (RUN) ──${c.reset}`);
       console.log(`  ${c.magenta}│${c.reset} ${userPrompt}`);
       if (expandOpts?.focus) {
         console.log(`  ${c.magenta}│${c.reset} ${c.dim}FOCUS: ${expandOpts.focus.slice(0, 200)}${c.reset}`);
       }
       console.log(`  ${c.magenta}└──${c.reset}`);
     }
-    console.log(`  ${c.dim}Expanding ${roleLabel} prompt via ${expandModel}...${c.reset}`);
+    console.log(`  ${c.dim}Expanding RUN prompt via ${expandModel}...${c.reset}`);
     if (isDebug) {
-      process.stdout.write(`\n  ${c.blue}┌─ EXPANDED ${roleLabel} PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
+      process.stdout.write(`\n  ${c.blue}┌─ EXPANDED RUN PROMPT ──${c.reset}\n  ${c.blue}│${c.reset} `);
     }
 
-    const expansion = role === "run"
-      ? await harness.expandRun(
-          context,
-          expandOpts,
-          isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
-        )
-      : await harness.expandEval(
-          context,
-          expandOpts,
-          isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
-        );
+    const expansion = await harness.expandRun(
+      context,
+      expandOpts,
+      isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
+    );
 
     if (isDebug) {
       console.log(`\n  ${c.blue}└── ${c.dim}(${expansion.expandedPrompt.length} chars)${c.reset}`);
     } else if (isVerbose) {
-      console.log(`  ${c.dim}Expanded ${roleLabel} prompt (${expansion.expandedPrompt.length} chars)${c.reset}`);
+      console.log(`  ${c.dim}Expanded RUN prompt (${expansion.expandedPrompt.length} chars)${c.reset}`);
     }
     if (cliOptions.raw) {
-      rawLog(`RAW ENGINEER RESPONSE (${roleLabel})`, expansion.rawResponse);
+      rawLog("RAW ENGINEER RESPONSE (RUN)", expansion.rawResponse);
     }
 
     // Check for request_input in the engineer's response

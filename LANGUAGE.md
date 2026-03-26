@@ -214,13 +214,15 @@ ALLOW_REQUEST* → NOTIFY? → REQUEST_TIMEOUT? → RETRY?
 
 ## Expansion Modes
 
-Every RUN and EVAL step has one of three expansion modes:
+Only RUN steps are expanded by the prompt engineer. EVAL always receives the prompt verbatim — no engineer touch, no model call.
 
 | Mode | Syntax | Behavior |
 |---|---|---|
-| auto | `RUN` / `EVAL` | Expanded by `PROMPT_ENGINEER_MODEL` |
-| raw | `RAW_RUN` / `RAW_EVAL` | No expansion — verbatim |
-| custom | `EXPAND ... INTO:` | Expanded by specified model with optional FOCUS |
+| auto | `RUN` | Expanded by `PROMPT_ENGINEER_MODEL` |
+| raw | `RAW_RUN` | No expansion — verbatim |
+| custom | `EXPAND ... INTO: RUN` | Expanded by specified model with optional FOCUS |
+| — | `EVAL` / `RAW_EVAL` | No expansion — prompt goes verbatim to bin |
+| — | `EXPAND ... INTO: EVAL` | Prompt goes verbatim (FOR/FOCUS/AS are accepted but ignored) |
 
 ## WITH Clause
 
@@ -327,7 +329,7 @@ RUN and EVAL sessions persist across retries within a step. For Claude CLI, this
 ## Execution Model
 
 1. Steps execute sequentially within a CIRCUIT block
-2. Each step: expand RUN prompt → execute RUN bin → expand EVAL prompt → execute EVAL bin → parse verdict
+2. Each step: expand RUN prompt → execute RUN bin → execute EVAL bin (no expansion) → parse verdict
 3. On FAILURE: feed EVAL output back as feedback, retry (up to RETRY limit)
 4. On SUCCESS: advance to next step
 5. If retries exhausted: circuit aborts

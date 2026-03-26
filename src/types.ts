@@ -182,7 +182,6 @@ export interface StepState {
   success: boolean;
   /** Cached expansion from previous iteration — reused if BIN fails before next expansion */
   cachedRunExpansion: ExpansionResult | null;
-  cachedEvalExpansion: ExpansionResult | null;
   /** Recovery context from a failed session — prepended to next prompt when --resume fails */
   recoveryContext: string | null;
 }
@@ -317,11 +316,8 @@ export interface IterationEvent {
     durationMs: number;
     rawLogRef: string | null;
   };
-  expandEval: {
-    context: Record<string, unknown>;
-    expandedPrompt: string;
-    rawEngineerResponse: string;
-  } | null;
+  /** EVAL never expands — always null */
+  expandEval: null;
   eval: {
     command: string[];
     stdout: string;
