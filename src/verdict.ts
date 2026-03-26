@@ -1,18 +1,28 @@
 /**
- * Parse a <verdict>SUCCESS</verdict> or <verdict>FAILURE</verdict>
- * from EVAL output.
+ * Parse a <verdict> tag from EVAL output.
+ *
+ * Searches the raw stdout first (contains all streamed text deltas),
+ * then falls back to the parsed result text. This handles cases where
+ * the verdict tag arrives after the result event fires.
  *
  * - Case-insensitive matching
  * - No tag found → defaults to FAILURE (safe default)
- * - Returns the entire EVAL output as feedback (not just the verdict)
+ * - Returns the entire raw stdout as feedback
+ * @param rawStdout - raw subprocess stdout (all streamed JSON Lines)
+ * @param parsedResult - the parsed result text from data.result
  */
 export type Verdict = "SUCCESS" | "PROGRESS" | "FAILURE";
 
-export function parseVerdict(evalOutput: string): {
+export function parseVerdict(
+  rawStdout: string,
+  parsedResult: string,
+): {
   verdict: Verdict;
   feedback: string;
 } {
-  const match = evalOutput.match(/<verdict>(.*?)<\/verdict>/is);
+  // Search raw stdout first — has all streamed text deltas
+  const match = rawStdout.match(/<verdict>(.*?)<\/verdict>/is)
+    ?? parsedResult.match(/<verdict>(.*?)<\/verdict>/is);
 
   if (match) {
     const verdictText = match[1]!.trim().toUpperCase();

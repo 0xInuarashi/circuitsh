@@ -768,8 +768,8 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     rawLog("EVAL STDERR", evalOutput.stderr);
   }
 
-  // Parse verdict
-  const { verdict, feedback } = parseVerdict(evalOutput.stdout);
+  // Parse verdict — search raw stdout first (has all streamed deltas)
+  const { verdict, feedback } = parseVerdict(evalOutput.rawStdout, evalOutput.stdout);
 
   if (isDebug) {
     const verdictColor =
