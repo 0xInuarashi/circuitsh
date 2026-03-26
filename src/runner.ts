@@ -39,6 +39,7 @@ export async function runBin(opts: {
         cwd: opts.workingDir,
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env },
+        detached: true,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -51,18 +52,21 @@ export async function runBin(opts: {
     let timedOut = false;
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
+    const killTree = (signal: NodeJS.Signals) => {
+      try {
+        // Kill the entire process group (negative PID)
+        process.kill(-proc.pid!, signal);
+      } catch {
+        try { proc.kill(signal); } catch { /* already dead */ }
+      }
+    };
+
     if (opts.timeoutMs > 0) {
       timeoutHandle = setTimeout(() => {
         timedOut = true;
-        proc.kill("SIGTERM");
+        killTree("SIGTERM");
         // Grace period then SIGKILL
-        setTimeout(() => {
-          try {
-            proc.kill("SIGKILL");
-          } catch {
-            // already dead
-          }
-        }, 5000);
+        setTimeout(() => killTree("SIGKILL"), 5000);
       }, opts.timeoutMs);
     }
 
@@ -88,21 +92,24 @@ export async function runBin(opts: {
 
       const durationMs = Date.now() - startTime;
 
+      const rawStdout = stdoutChunks.join("");
+      const stderr = stderrChunks.join("");
+
       if (timedOut) {
-        const rawStdout = stdoutChunks.join("");
         reject(new BinTimeoutError(
           opts.binCommand,
           opts.timeoutMs,
-          opts.adapter.parseOutput(rawStdout, stderrChunks.join("")),
-          stderrChunks.join(""),
+          opts.adapter.parseOutput(rawStdout, stderr),
+          rawStdout,
+          stderr,
         ));
         return;
       }
 
-      const rawStdout = stdoutChunks.join("");
       resolve({
-        stdout: opts.adapter.parseOutput(rawStdout, stderrChunks.join("")),
-        stderr: stderrChunks.join(""),
+        stdout: opts.adapter.parseOutput(rawStdout, stderr),
+        rawStdout,
+        stderr,
         exitCode,
         durationMs,
         command,

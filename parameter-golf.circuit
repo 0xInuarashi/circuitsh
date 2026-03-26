@@ -44,7 +44,7 @@ CIRCUIT Parameter Golf:
     nvidia-smi shows 8x H100, the repo is cloned, \
     dependencies are installed, and data/datasets/fineweb10B_sp1024/ \
     contains the training shards.
-    RETRY 3
+    RETRY 20
 
   # Step 3: Run baseline to establish starting BPB
   RUN SSH into RunPod and run the unmodified baseline: \

@@ -1,6 +1,6 @@
 import { execSync, spawn as spawnProcess } from "child_process";
 import { createInterface } from "readline";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { platform, release, cpus, totalmem, freemem } from "os";
 import type {
   CircuitAST,
@@ -23,8 +23,14 @@ import {
   logStepStart,
   logStepEnd,
   logIteration,
-  makeLogPath,
+  makeLogPaths,
+  writeRawStreamLog,
+  writeSessionRecoveryDoc,
+  formatRecoveryContext,
+  writeManifest,
 } from "./storage.ts";
+import type { SessionRecoveryDoc } from "./types.ts";
+import { join } from "path";
 import { AuthError, BinNotFoundError, BinTimeoutError, RateLimitError } from "./errors.ts";
 
 // ── ANSI Colors ──
@@ -73,7 +79,7 @@ export async function executeCircuit(
   // Pre-flight: validate all bins exist before execution
   validateBins(circuit, config);
 
-  const logPath = makeLogPath(circuit.name, config.logDir);
+  const { jsonlPath: logPath, runDir } = makeLogPaths(circuit.name, config.logDir);
   logCircuitStart(logPath, circuit.name, config, circuit.steps);
 
   const startTime = Date.now();
@@ -130,6 +136,7 @@ export async function executeCircuit(
       success: false,
       cachedRunExpansion: null,
       cachedEvalExpansion: null,
+      recoveryContext: null,
     };
 
     const maxRetries = step.eval?.retry ?? 0;
@@ -159,6 +166,7 @@ export async function executeCircuit(
           cliOptions,
           stepRunBin,
           stepEvalBin,
+          runDir,
         });
 
         state.iterations.push(iterResult);
@@ -169,12 +177,50 @@ export async function executeCircuit(
         );
         Object.assign(state.scratchpad, scratchUpdates);
 
-        // Log iteration
+        // Write raw stream logs
+        const runRawLogRef = writeRawStreamLog(runDir, {
+          role: "run",
+          stepIndex: state.stepIndex,
+          iteration,
+          stdout: iterResult.runOutput.rawStdout,
+          stderr: iterResult.runOutput.stderr,
+        });
+        writeSessionRecoveryDoc(runDir, {
+          circuitName: circuit.name,
+          role: "run",
+          stepIndex: state.stepIndex,
+          iteration,
+          sessionId: state.runSessionId,
+          rawStdout: iterResult.runOutput.rawStdout,
+        });
+
+        let evalRawLogRef: string | null = null;
+        if (iterResult.evalOutput) {
+          evalRawLogRef = writeRawStreamLog(runDir, {
+            role: "eval",
+            stepIndex: state.stepIndex,
+            iteration,
+            stdout: iterResult.evalOutput.rawStdout,
+            stderr: iterResult.evalOutput.stderr,
+          });
+          writeSessionRecoveryDoc(runDir, {
+            circuitName: circuit.name,
+            role: "eval",
+            stepIndex: state.stepIndex,
+            iteration,
+            sessionId: state.evalSessionId,
+            rawStdout: iterResult.evalOutput.rawStdout,
+          });
+        }
+
+        // Log iteration to JSONL
         logIteration(
           logPath,
           iterResult,
           iterResult.expandedRunPrompt,
           iterResult.expandedEvalPrompt,
+          runRawLogRef,
+          evalRawLogRef,
         );
 
         totalIterations++;
@@ -213,6 +259,28 @@ export async function executeCircuit(
         }
         if (err instanceof BinTimeoutError) {
           console.log(`  ${c.yellow}BIN timed out after ${(err.timeoutMs / 1000).toFixed(0)}s${c.reset}`);
+
+          // Write partial raw logs from the timed-out process
+          if (err.partialRawStdout || err.partialStderr) {
+            writeRawStreamLog(runDir, {
+              role: "run",
+              stepIndex: state.stepIndex,
+              iteration,
+              stdout: err.partialRawStdout,
+              stderr: err.partialStderr,
+            });
+            if (err.partialRawStdout) {
+              writeSessionRecoveryDoc(runDir, {
+                circuitName: circuit.name,
+                role: "run",
+                stepIndex: state.stepIndex,
+                iteration,
+                sessionId: state.runSessionId,
+                rawStdout: err.partialRawStdout,
+              });
+            }
+          }
+
           console.log(`  ${c.dim}Consulting prompt engineer...${c.reset}`);
 
           const diagnosis = await diagnoseTimeout(client, config.promptEngineerModel, {
@@ -236,7 +304,7 @@ export async function executeCircuit(
           }
 
           if (diagnosis.action === "increase_timeout" && diagnosis.suggestedTimeoutMs) {
-            const newTimeout = Math.min(diagnosis.suggestedTimeoutMs, config.timeout * 1000 * 5 || 3600000);
+            const newTimeout = Math.min(diagnosis.suggestedTimeoutMs, config.timeout * 1000 * 10 || 3600000);
             config.timeout = newTimeout / 1000;
             console.log(`  ${c.yellow}Timeout increased to ${config.timeout}s${c.reset}`);
           }
@@ -246,6 +314,10 @@ export async function executeCircuit(
             console.log(`  ${c.cyan}Resuming session...${c.reset}`);
             iteration--;
           }
+          // BIN may have created sessions before being killed — mark as created
+          // so next retry uses --resume to preserve context
+          state.runSessionCreated = true;
+          state.evalSessionCreated = true;
 
           // "retry" falls through to the next iteration naturally
           continue;
@@ -283,6 +355,17 @@ export async function executeCircuit(
     durationMs,
   );
 
+  writeManifest(runDir, {
+    circuitName: circuit.name,
+    jsonlPath: logPath,
+    startedAt: new Date(startTime).toISOString(),
+    endedAt: new Date().toISOString(),
+    success: circuitSuccess,
+    totalSteps: circuit.steps.length,
+    totalIterations,
+    durationMs,
+  });
+
   const summaryColor = circuitSuccess ? c.green : c.red;
   console.log(`\n${summaryColor}${"═".repeat(60)}${c.reset}`);
   console.log(
@@ -292,6 +375,7 @@ export async function executeCircuit(
   );
   console.log(`${c.dim}Iterations: ${totalIterations} │ Duration: ${(durationMs / 1000).toFixed(1)}s${c.reset}`);
   console.log(`${c.dim}Log: ${logPath}${c.reset}`);
+  console.log(`${c.dim}Logs: ${runDir}${c.reset}`);
   console.log(`${summaryColor}${"═".repeat(60)}${c.reset}`);
 
   return circuitSuccess;
@@ -315,6 +399,7 @@ interface RunIterationOpts {
   cliOptions: CLIOptions;
   stepRunBin: string;
   stepEvalBin: string;
+  runDir: string;
 }
 
 async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
@@ -334,6 +419,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     cliOptions,
     stepRunBin,
     stepEvalBin,
+    runDir,
   } = opts;
 
   const iterStart = Date.now();
@@ -432,10 +518,18 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   Object.assign(state.engineerScratchpad, runExpansion.engineerScratchpadUpdates);
 
   // ── Execute RUN_BIN ──
+  // Inject recovery context if we had to abandon a previous session
+  let runPrompt = runExpansion.expandedPrompt;
+  if (state.recoveryContext && !state.runSessionCreated) {
+    runPrompt = state.recoveryContext + "\n\n" + runPrompt;
+    state.recoveryContext = null;
+    console.log(`  ${c.cyan}Injected session recovery context into prompt${c.reset}`);
+  }
+
   const runIsNewSession = !state.runSessionCreated;
   const runCommand = runAdapter.buildCommand(
     stepRunBin,
-    runExpansion.expandedPrompt,
+    runPrompt,
     state.runSessionId,
     runIsNewSession,
     config.dir,
@@ -453,7 +547,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   const runOutput = await runBin({
     adapter: runAdapter,
     binCommand: stepRunBin,
-    prompt: runExpansion.expandedPrompt,
+    prompt: runPrompt,
     sessionId: state.runSessionId,
     isFirst: runIsNewSession,
     workingDir: config.dir,
@@ -465,16 +559,22 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   });
 
   // Track session creation — if BIN produced output, session exists
-  if (runOutput.exitCode !== null && runOutput.stdout.length > 0) {
+  if (runOutput.exitCode !== null && runOutput.rawStdout.length > 0) {
     state.runSessionCreated = true;
   }
-  // Detect error_during_execution (session resume failed) — reset session
-  if (runOutput.stdout.includes('"subtype":"error_during_execution"') || runOutput.stdout.includes('"is_error":true')) {
+  // Session recovery: resume first, reset only as last resort
+  if (runOutput.rawStdout.includes('"subtype":"error_during_execution"') || runOutput.rawStdout.includes('"is_error":true')) {
     if (!runIsNewSession) {
-      console.log(`  ${c.yellow}Session resume failed — will start fresh next retry${c.reset}`);
+      // --resume failed — session is corrupted, load recovery context and start fresh
+      console.log(`  ${c.yellow}Session resume failed — loading recovery context for fresh session${c.reset}`);
+      state.recoveryContext = loadRecoveryContext(runDir, state.stepIndex, "run");
       state.runSessionCreated = false;
       state.runSessionId = crypto.randomUUID();
     }
+  } else if (runOutput.exitCode !== 0 && runOutput.rawStdout.length === 0) {
+    // CLI failed before producing output — session may exist, try resume next
+    console.log(`  ${c.yellow}BIN failed before producing output — will try resuming session${c.reset}`);
+    state.runSessionCreated = true;
   }
 
   const runExitColor = runOutput.exitCode === 0 ? c.green : c.red;
@@ -571,10 +671,18 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   Object.assign(state.engineerScratchpad, evalExpansion.engineerScratchpadUpdates);
 
   // ── Execute EVAL_BIN ──
+  // Inject recovery context if we had to abandon a previous session
+  let evalPrompt = evalExpansion.expandedPrompt;
+  if (state.recoveryContext && !state.evalSessionCreated) {
+    evalPrompt = state.recoveryContext + "\n\n" + evalPrompt;
+    state.recoveryContext = null;
+    console.log(`  ${c.cyan}Injected EVAL session recovery context into prompt${c.reset}`);
+  }
+
   const evalIsNewSession = !state.evalSessionCreated;
   const evalCommand = evalAdapter.buildCommand(
     stepEvalBin,
-    evalExpansion.expandedPrompt,
+    evalPrompt,
     state.evalSessionId,
     evalIsNewSession,
     config.dir,
@@ -592,7 +700,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   const evalOutput = await runBin({
     adapter: evalAdapter,
     binCommand: stepEvalBin,
-    prompt: evalExpansion.expandedPrompt,
+    prompt: evalPrompt,
     sessionId: state.evalSessionId,
     isFirst: evalIsNewSession,
     workingDir: config.dir,
@@ -604,16 +712,22 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   });
 
   // Track session creation
-  if (evalOutput.exitCode !== null && evalOutput.stdout.length > 0) {
+  if (evalOutput.exitCode !== null && evalOutput.rawStdout.length > 0) {
     state.evalSessionCreated = true;
   }
-  // Detect error_during_execution — reset session for next retry
-  if (evalOutput.stdout.includes('"subtype":"error_during_execution"') || evalOutput.stdout.includes('"is_error":true')) {
+  // Session recovery: resume first, reset only as last resort
+  if (evalOutput.rawStdout.includes('"subtype":"error_during_execution"') || evalOutput.rawStdout.includes('"is_error":true')) {
     if (!evalIsNewSession) {
-      console.log(`  ${c.yellow}EVAL session resume failed — will start fresh next retry${c.reset}`);
+      // --resume failed — session is corrupted, load recovery context and start fresh
+      console.log(`  ${c.yellow}EVAL session resume failed — loading recovery context for fresh session${c.reset}`);
+      state.recoveryContext = loadRecoveryContext(runDir, state.stepIndex, "eval");
       state.evalSessionCreated = false;
       state.evalSessionId = crypto.randomUUID();
     }
+  } else if (evalOutput.exitCode !== 0 && evalOutput.rawStdout.length === 0) {
+    // CLI failed before producing output — session may exist, try resume next
+    console.log(`  ${c.yellow}EVAL BIN failed before producing output — will try resuming session${c.reset}`);
+    state.evalSessionCreated = true;
   }
 
   if (cliOptions.raw) {
@@ -909,6 +1023,23 @@ function validateBins(
         ? missing[0]!
         : `Multiple bins not found: ${missing.join(", ")}`,
     );
+  }
+}
+
+/**
+ * Load the most recent session recovery doc and format it as context for prompt injection.
+ * Returns null if no recovery doc exists.
+ */
+function loadRecoveryContext(runDir: string, stepIndex: number, role: "run" | "eval"): string | null {
+  const filename = `step${stepIndex}_${role}_session.json`;
+  const docPath = join(runDir, "recovery", filename);
+  try {
+    const raw = readFileSync(docPath, "utf-8");
+    const doc = JSON.parse(raw) as SessionRecoveryDoc;
+    if (doc.conversationTrace.length === 0) return null;
+    return formatRecoveryContext(doc);
+  } catch {
+    return null;
   }
 }
 

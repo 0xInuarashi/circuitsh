@@ -160,7 +160,8 @@ export interface IterationResult {
 }
 
 export interface BinOutput {
-  stdout: string;
+  stdout: string;          // parsed output (e.g., result text from stream-json)
+  rawStdout: string;       // raw bytes from subprocess stdout
   stderr: string;
   exitCode: number | null;
   durationMs: number;
@@ -182,6 +183,8 @@ export interface StepState {
   /** Cached expansion from previous iteration — reused if BIN fails before next expansion */
   cachedRunExpansion: ExpansionResult | null;
   cachedEvalExpansion: ExpansionResult | null;
+  /** Recovery context from a failed session — prepended to next prompt when --resume fails */
+  recoveryContext: string | null;
 }
 
 export interface CircuitRunState {
@@ -312,6 +315,7 @@ export interface IterationEvent {
     stderr: string;
     exitCode: number | null;
     durationMs: number;
+    rawLogRef: string | null;
   };
   expandEval: {
     context: Record<string, unknown>;
@@ -324,6 +328,7 @@ export interface IterationEvent {
     stderr: string;
     exitCode: number | null;
     durationMs: number;
+    rawLogRef: string | null;
   } | null;
   verdict: "SUCCESS" | "FAILURE" | null;
   feedback: string;
@@ -356,3 +361,26 @@ export type CircuitEvent =
   | IterationEvent
   | StepEndEvent
   | CircuitEndEvent;
+
+// ── Session Recovery Types ──
+
+export interface ConversationTurn {
+  role: "assistant" | "tool_call" | "tool_result";
+  content: string;
+  toolName?: string;
+}
+
+export interface SessionRecoveryDoc {
+  circuitName: string;
+  stepIndex: number;
+  iteration: number;
+  sessionId: string;
+  role: "run" | "eval";
+  conversationTrace: ConversationTurn[];
+  resultText: string | null;
+  metadata: {
+    totalCostUsd: number | null;
+    numTurns: number | null;
+    durationMs: number | null;
+  };
+}

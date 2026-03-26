@@ -43,13 +43,15 @@ export class BinNotFoundError extends BinError {
 export class BinTimeoutError extends BinError {
   timeoutMs: number;
   partialStdout: string;
+  partialRawStdout: string;
   partialStderr: string;
 
-  constructor(bin: string, timeoutMs: number, partialStdout = "", partialStderr = "") {
+  constructor(bin: string, timeoutMs: number, partialStdout = "", partialRawStdout = "", partialStderr = "") {
     super(`BIN timed out after ${timeoutMs}ms: ${bin}`);
     this.name = "BinTimeoutError";
     this.timeoutMs = timeoutMs;
     this.partialStdout = partialStdout;
+    this.partialRawStdout = partialRawStdout;
     this.partialStderr = partialStderr;
   }
 }
