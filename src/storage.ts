@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import type {
   CircuitConfig,
@@ -452,4 +452,36 @@ export function appendApiTrafficLog(
     JSON.stringify(event) + "\n",
     "utf-8",
   );
+}
+
+// ── Circuit Checkpoint ───────────────────────────────────────
+
+export interface CircuitCheckpoint {
+  circuitName: string;
+  stepIndex: number;
+  iteration: number;
+  scratchpad: Record<string, string>;
+  engineerScratchpad: Record<string, string>;
+  runSessionId: string;
+  evalSessionId: string;
+  timestamp: string;
+}
+
+export function writeCheckpoint(runDir: string, ckpt: CircuitCheckpoint): void {
+  writeFileSync(
+    join(runDir, "checkpoint.json"),
+    JSON.stringify(ckpt, null, 2),
+    "utf-8",
+  );
+}
+
+export function loadCheckpoint(runDir: string): CircuitCheckpoint | null {
+  const path = join(runDir, "checkpoint.json");
+  if (!existsSync(path)) return null;
+  try {
+    const raw = readFileSync(path, "utf-8");
+    return JSON.parse(raw) as CircuitCheckpoint;
+  } catch {
+    return null;
+  }
 }

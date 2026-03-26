@@ -226,10 +226,6 @@ export class Harness {
         ` (${context.isFirst ? "first attempt" : `retry ${context.iteration}, ${context.maxRetries - context.iteration} retries remaining`})`,
     );
 
-    if (context.evalFeedback) {
-      sections.push(`PREVIOUS EVALUATION:\n${context.evalFeedback}`);
-    }
-
     const engEntries = Object.entries(context.engineerScratchpad);
     if (engEntries.length > 0) {
       sections.push(

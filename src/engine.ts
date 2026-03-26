@@ -16,7 +16,7 @@ import { OpenRouterClient } from "./client.ts";
 import { Harness, diagnoseTimeout } from "./harness.ts";
 import { detectAdapter } from "./session.ts";
 import { runBin } from "./runner.ts";
-import { parseVerdict, parseScratchpadUpdates, parseRequestInput } from "./verdict.ts";
+import { parseVerdict, parseScratchpadUpdates, parseRequestInput, type Verdict } from "./verdict.ts";
 import {
   logCircuitStart,
   logCircuitEnd,
@@ -30,8 +30,10 @@ import {
   writeManifest,
   writeEngineerCallLog,
   appendApiTrafficLog,
+  writeCheckpoint,
+  loadCheckpoint,
 } from "./storage.ts";
-import type { SessionRecoveryDoc } from "./types.ts";
+import type { SessionRecoveryDoc, CircuitCheckpoint } from "./storage.ts";
 import { join } from "path";
 import { AuthError, BinNotFoundError, BinTimeoutError, RateLimitError } from "./errors.ts";
 
@@ -61,6 +63,26 @@ export async function executeCircuit(
   cliOptions: CLIOptions,
 ): Promise<boolean> {
   const circuit = ast.circuits[0]!;
+
+  // ── Resume from checkpoint ──
+  let resumeCheckpoint: CircuitCheckpoint | null = null;
+  if (cliOptions.resume) {
+    const runDir = join(config.logDir, cliOptions.resume);
+    const ckpt = loadCheckpoint(runDir);
+    if (!ckpt) {
+      console.error(`Error: No checkpoint found in ${runDir}`);
+      return false;
+    }
+    if (ckpt.circuitName !== circuit.name) {
+      console.error(`Error: Circuit name mismatch. Expected "${circuit.name}", got "${ckpt.circuitName}"`);
+      return false;
+    }
+    resumeCheckpoint = ckpt;
+    console.log(
+      `  ${c.cyan}↺ Resuming from checkpoint — step ${ckpt.stepIndex + 1}, iteration ${ckpt.iteration + 1}${c.reset}`,
+    );
+  }
+
   const rawLogger = cliOptions.raw
     ? (label: string, data: string) => {
         console.log(`\n${c.gray}┌── RAW: ${label} ──${c.reset}`);
@@ -77,7 +99,14 @@ export async function executeCircuit(
   // Pre-flight: validate all bins exist before execution
   validateBins(circuit, config);
 
-  const { jsonlPath: logPath, runDir } = makeLogPaths(circuit.name, config.logDir);
+  let logPath: string;
+  let runDir: string;
+  if (resumeCheckpoint) {
+    runDir = join(config.logDir, cliOptions.resume!);
+    logPath = join(config.logDir, `${cliOptions.resume}.jsonl`);
+  } else {
+    ({ jsonlPath: logPath, runDir } = makeLogPaths(circuit.name, config.logDir));
+  }
 
   // Disk logger — always active, writes all API traffic to engineer/api_traffic.jsonl
   const diskLogger = (label: string, data: string) => {
@@ -127,6 +156,16 @@ export async function executeCircuit(
       break;
     }
 
+    // Skip steps already completed in checkpoint
+    if (resumeCheckpoint && stepIndex < resumeCheckpoint.stepIndex) {
+      console.log(
+        `  ${c.green}✓ Step ${stepIndex + 1} — completed (skipping)${c.reset}`,
+      );
+      completedStepSummaries.push(`Step ${stepIndex + 1}: completed (skipped on resume)`);
+      stepsCompleted++;
+      continue;
+    }
+
     logStepStart(logPath, stepIndex, step.run.prompt, step.eval?.prompt ?? null);
     console.log(`\n${c.cyan}${"─".repeat(60)}${c.reset}`);
     console.log(`${c.bold}${c.cyan}Step ${stepIndex + 1}/${circuit.steps.length}${c.reset} ${c.dim}│${c.reset} ${c.white}RUN${c.reset}`);
@@ -148,16 +187,21 @@ export async function executeCircuit(
       }
     }
 
+    // Determine if we're resuming at this step
+    const isResumingThisStep = resumeCheckpoint && stepIndex === resumeCheckpoint.stepIndex;
+
     const state: StepState = {
       stepIndex,
       run: step.run,
       eval: step.eval,
-      runSessionId: crypto.randomUUID(),
-      evalSessionId: crypto.randomUUID(),
+      runSessionId: isResumingThisStep ? resumeCheckpoint!.runSessionId : crypto.randomUUID(),
+      evalSessionId: isResumingThisStep ? resumeCheckpoint!.evalSessionId : crypto.randomUUID(),
       runSessionCreated: false,
       evalSessionCreated: false,
-      scratchpad: initialScratchpad,
-      engineerScratchpad: {},
+      scratchpad: isResumingThisStep
+        ? { ...initialScratchpad, ...resumeCheckpoint!.scratchpad }
+        : initialScratchpad,
+      engineerScratchpad: isResumingThisStep ? { ...resumeCheckpoint!.engineerScratchpad } : {},
       iterations: [],
       success: false,
       cachedRunExpansion: null,
@@ -167,9 +211,13 @@ export async function executeCircuit(
     const maxRetries = step.eval?.retry ?? 0;
     const maxAttempts = maxRetries + 1;
 
-    for (let iteration = 0; iteration < maxAttempts; iteration++) {
+    // On resume, start from the iteration after the last completed one
+    const startIteration = isResumingThisStep ? resumeCheckpoint!.iteration + 1 : 0;
+
+    for (let iteration = startIteration; iteration < maxAttempts; iteration++) {
       engineerLogContext = { stepIndex, iteration };
-      const isFirst = iteration === 0;
+      // Not a fresh session on resume — the session already exists from checkpoint
+      const isFirst = false;
 
       if (!isFirst) {
         console.log(`\n  ${c.yellow}↻ Retry ${iteration}/${maxRetries}${c.reset}`);
@@ -251,6 +299,18 @@ export async function executeCircuit(
 
         totalIterations++;
 
+        // Write circuit checkpoint — preserves state for resume after crash
+        writeCheckpoint(runDir, {
+          circuitName: circuit.name,
+          stepIndex: state.stepIndex,
+          iteration,
+          scratchpad: { ...state.scratchpad },
+          engineerScratchpad: { ...state.engineerScratchpad },
+          runSessionId: state.runSessionId,
+          evalSessionId: state.evalSessionId,
+          timestamp: new Date().toISOString(),
+        });
+
         // Iteration completed — clear RUN expansion cache (next retry needs fresh expansion with new feedback)
         state.cachedRunExpansion = null;
 
@@ -267,9 +327,15 @@ export async function executeCircuit(
           break;
         }
 
-        console.log(
-          `  ${c.red}✗ EVAL failed${iteration < maxRetries ? ` ${c.yellow}— retrying` : ` ${c.dim}— retries exhausted`}${c.reset}`,
-        );
+        if (iterResult.verdict === "PROGRESS") {
+          console.log(
+            `  ${c.cyan}↻ Making progress${iteration < maxRetries ? ` ${c.yellow}— retrying` : ` ${c.dim}— retries exhausted`}${c.reset}`,
+          );
+        } else {
+          console.log(
+            `  ${c.red}✗ EVAL failed${iteration < maxRetries ? ` ${c.yellow}— retrying` : ` ${c.dim}— retries exhausted`}${c.reset}`,
+          );
+        }
       } catch (err) {
         if (err instanceof AuthError) {
           console.error(`\n  ${c.red}${c.bold}AUTH ERROR:${c.reset} ${c.red}${err.message}${c.reset}`);
@@ -469,12 +535,6 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     !isFirst ? getDirectoryDiff(config.dir) : "";
 
   // Get eval feedback from previous iteration
-  const lastIteration =
-    state.iterations.length > 0
-      ? state.iterations[state.iterations.length - 1]!
-      : null;
-  const evalFeedback = lastIteration?.feedback ?? null;
-
   // ── Expand RUN prompt ──
   const runContext: ExpansionContext = {
     role: "run",
@@ -483,7 +543,6 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     iteration,
     maxRetries,
     isFirst,
-    evalFeedback,
     scratchpad: { ...state.scratchpad },
     engineerScratchpad: { ...state.engineerScratchpad },
     workingDirSnapshot,
@@ -710,11 +769,13 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   }
 
   // Parse verdict
-  const { success, feedback } = parseVerdict(evalOutput.stdout);
-  const verdict = success ? "SUCCESS" : "FAILURE";
+  const { verdict, feedback } = parseVerdict(evalOutput.stdout);
 
   if (isDebug) {
-    const verdictColor = verdict === "SUCCESS" ? c.green : c.red;
+    const verdictColor =
+      verdict === "SUCCESS" ? c.green
+      : verdict === "PROGRESS" ? c.cyan
+      : c.red;
     console.log(`\n  ${verdictColor}┌─ VERDICT: ${verdict} ──${c.reset}`);
     if (feedback) {
       console.log(indent(feedback.slice(0, 500), `  ${verdictColor}│${c.reset} `));

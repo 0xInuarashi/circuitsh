@@ -150,7 +150,7 @@ export interface IterationResult {
   runOutput: BinOutput;
   expandedEvalPrompt: string | null;
   evalOutput: BinOutput | null;
-  verdict: "SUCCESS" | "FAILURE" | null;
+  verdict: "SUCCESS" | "PROGRESS" | "FAILURE" | null;
   feedback: string;
   scratchpad: Record<string, string>;
   engineerScratchpad: Record<string, string>;
@@ -204,7 +204,6 @@ export interface ExpansionContext {
   iteration: number;
   maxRetries: number;
   isFirst: boolean;
-  evalFeedback: string | null;
   scratchpad: Record<string, string>;
   engineerScratchpad: Record<string, string>;
   workingDirSnapshot: string;
@@ -326,7 +325,7 @@ export interface IterationEvent {
     durationMs: number;
     rawLogRef: string | null;
   } | null;
-  verdict: "SUCCESS" | "FAILURE" | null;
+  verdict: "SUCCESS" | "PROGRESS" | "FAILURE" | null;
   feedback: string;
   scratchpad: Record<string, string>;
   engineerScratchpad: Record<string, string>;

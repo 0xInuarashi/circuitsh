@@ -6,23 +6,28 @@
  * - No tag found → defaults to FAILURE (safe default)
  * - Returns the entire EVAL output as feedback (not just the verdict)
  */
+export type Verdict = "SUCCESS" | "PROGRESS" | "FAILURE";
+
 export function parseVerdict(evalOutput: string): {
-  success: boolean;
+  verdict: Verdict;
   feedback: string;
 } {
   const match = evalOutput.match(/<verdict>(.*?)<\/verdict>/is);
 
   if (match) {
     const verdictText = match[1]!.trim().toUpperCase();
-    return {
-      success: verdictText === "SUCCESS",
-      feedback: evalOutput,
-    };
+    if (verdictText === "SUCCESS") {
+      return { verdict: "SUCCESS", feedback: evalOutput };
+    }
+    if (verdictText === "PROGRESS") {
+      return { verdict: "PROGRESS", feedback: evalOutput };
+    }
+    return { verdict: "FAILURE", feedback: evalOutput };
   }
 
   // No verdict tag found: default to FAILURE
   return {
-    success: false,
+    verdict: "FAILURE",
     feedback:
       evalOutput +
       "\n\n[CIRCUIT: No <verdict> tag found in EVAL output. Defaulting to FAILURE.]",

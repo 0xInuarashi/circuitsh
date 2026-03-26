@@ -298,12 +298,20 @@ EVAL bins must output exactly one verdict tag:
 
 ```
 <verdict>SUCCESS</verdict>
+<verdict>PROGRESS</verdict>
 <verdict>FAILURE</verdict>
 ```
 
+| Verdict | Meaning | Engine behavior |
+|---|---|---|
+| `SUCCESS` | Criteria met | Advance to next step |
+| `PROGRESS` | Working toward it, not there yet | Retry with forward momentum |
+| `FAILURE` | Off track or broken | Retry with feedback |
+
 - Case-insensitive matching
 - No tag found = FAILURE (safe default)
-- Full EVAL output becomes feedback for the next RUN retry
+- PROGRESS and FAILURE both trigger retry; PROGRESS signals the eval saw something working
+- On retry: full EVAL output becomes feedback for the next RUN prompt
 
 ## Request Input Protocol
 
@@ -325,6 +333,16 @@ The engine:
 ## Session Persistence
 
 RUN and EVAL sessions persist across retries within a step. For Claude CLI, this uses `--session-id`. For other bins, full context is included in each expanded prompt.
+
+## Crash Recovery (--resume)
+
+Circuits checkpoint state to `LOG_DIR/<runId>/checkpoint.json` after each completed iteration. On crash, `--resume <runId>` restores:
+
+- All scratchpad values
+- Claude session IDs (so `--resume` picks up the agent conversation)
+- Step/iteration position (skips completed steps, resumes mid-step)
+
+The checkpoint reflects the last *completed* iteration. The in-progress iteration re-executes with the agent session auto-resumed.
 
 ## Execution Model
 
@@ -372,7 +390,9 @@ Options:
   --step <N>         Run only step N (1-indexed)
   --api-key <key>    Override API_KEY
   --log-dir <dir>    Override LOG_DIR
-  --resume <runId>   Resume from JSONL log
+  --resume <runId>   Resume from a checkpoint. runId is the base name of the
+                     run directory (e.g. circuit_20260326_thing from
+                     .circuit-runs/circuit_20260326_thing/)
 
 Exit codes:
   0    All steps passed
