@@ -4,7 +4,11 @@ import type {
   IterationResult,
   Verdict,
   VerdictSynthesisResult,
+  MonitorAction,
+  StreamMonitorConfig,
+  SessionAdapter,
 } from "./types.ts";
+import type { Writable } from "stream";
 import { OpenRouterClient } from "./client.ts";
 import {
   parseExpandedPrompt,
@@ -68,12 +72,39 @@ and the evaluation summary, emit exactly one verdict.
 <verdict>FAILURE</verdict>   — off track or broken, retry with feedback
 `;
 
+const DETECTOR_SYSTEM = `\
+You are a circuit stream monitor. Given a batch of raw stream events from an AI agent, \
+decide if intervention is needed.
+
+Respond with exactly:
+<detect>yes</detect>  — the agent needs help: plan approval, security check, user input required
+<detect>no</detect>   — proceed normally, agent is working fine
+`;
+
+const ACTION_ORCHESTRATOR_SYSTEM = `\
+You are a circuit action orchestrator. You watch an AI agent's stream and decide \
+how to respond when intervention is detected.
+
+You have access to:
+- stdin: write text to the agent's input stream (e.g. "yes\\n" to approve, "n\\n" to decline)
+- cancel: kill the subprocess immediately
+- escalate: surface the situation to a human user
+
+The agent is mid-task. Respond with exactly one action:
+<circuit_action>stdin:yes\\n</circuit_action>     — write "yes" to stdin (approve plan, continue)
+<circuit_action>stdin:n\\n</circuit_action>        — write "n" to stdin (decline)
+<circuit_action>cancel</circuit_action>            — kill the subprocess
+<circuit_action>escalate:reason for user</circuit_action>  — pause and ask user
+
+Choose the least invasive action that allows the circuit to proceed safely.
+`;
+
 /**
  * The Harness expands terse user prompts into rich, context-aware prompts
  * using the Prompt Engineer Model.
  */
 export type EngineerCallLogger = (log: {
-  callType: "run_expand" | "verdict_synthesis";
+  callType: "run_expand" | "verdict_synthesis" | "stream_monitor" | "action_orchestrator";
   model: string;
   temperature: number;
   messages: Array<{ role: string; content: string }>;
@@ -87,6 +118,7 @@ export class Harness {
   private client: OpenRouterClient;
   private model: string;
   private onLog: EngineerCallLogger | null = null;
+  private _stdin: Writable | null = null;
 
   constructor(client: OpenRouterClient, model: string) {
     this.client = client;
@@ -95,6 +127,10 @@ export class Harness {
 
   setLogger(logger: EngineerCallLogger): void {
     this.onLog = logger;
+  }
+
+  setStdin(stdin: Writable | null): void {
+    this._stdin = stdin;
   }
 
   /**
@@ -325,6 +361,178 @@ export class Harness {
     }
 
     return sections.join("\n\n");
+  }
+
+  // ── Stream Monitor ─────────────────────────────────────────────
+
+  /**
+   * Returns a callback to pass as onStdout to runBin.
+   * Wraps makeStreamHandler for display, then feeds raw events to the stream monitor.
+   */
+  makeMonitorHandler(
+    adapter: SessionAdapter,
+    streamLevel: "raw" | "debug" | "verbose",
+    config: StreamMonitorConfig,
+  ): (chunk: string) => void {
+    // Display handler (unchanged behavior)
+    const displayHandler = this._makeStreamHandler(adapter, streamLevel);
+
+    // Buffer for the detector LLM
+    const eventBuffer: string[] = [];
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let monitoring = true;
+
+    const flushBuffer = async () => {
+      if (!monitoring || eventBuffer.length === 0) return;
+      const events = [...eventBuffer];
+      eventBuffer.length = 0;
+
+      const needsAction = await this._runDetector(events);
+      if (!needsAction) return;
+
+      const action = await this._decideAction(events);
+      this._executeAction(action, config);
+    };
+
+    // Flush on interval or event count
+    const scheduleFlush = () => {
+      if (flushTimer) clearTimeout(flushTimer);
+      flushTimer = setTimeout(flushBuffer, 500);
+    };
+
+    return (chunk: string) => {
+      displayHandler(chunk);
+      if (!monitoring) return;
+      eventBuffer.push(chunk);
+      if (eventBuffer.length >= 10) {
+        flushBuffer();
+      } else {
+        scheduleFlush();
+      }
+    };
+  }
+
+  private _makeStreamHandler(
+    adapter: SessionAdapter,
+    level: "raw" | "debug" | "verbose",
+  ): (chunk: string) => void {
+    if (level === "raw") {
+      return (c) => process.stdout.write(c);
+    }
+    const parseLevel = level === "debug" ? "debug" : "verbose";
+    let buffer = "";
+    return (chunk: string) => {
+      buffer += chunk;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const display = adapter.parseStreamChunk?.(line, parseLevel);
+        if (display) process.stdout.write(display);
+      }
+    };
+  }
+
+  private async _runDetector(events: string[]): Promise<boolean> {
+    const callStart = Date.now();
+    const eventsText = events.join("");
+
+    const messages = [
+      { role: "system" as const, content: DETECTOR_SYSTEM },
+      { role: "user" as const, content: `Stream events:\n${eventsText}` },
+    ];
+
+    const response = await this._complete(this.model, messages, 0.0);
+
+    this.onLog?.({
+      callType: "stream_monitor",
+      model: this.model,
+      temperature: 0.0,
+      messages,
+      rawOutput: response,
+      parsedResult: { needsAction: response.includes("yes") },
+      durationMs: Date.now() - callStart,
+      formatRetried: false,
+    });
+
+    return response.includes("yes");
+  }
+
+  private async _decideAction(events: string[], trigger: string = "intervention needed"): Promise<MonitorAction> {
+    const callStart = Date.now();
+    const eventsText = events.join("");
+
+    const messages = [
+      { role: "system" as const, content: ACTION_ORCHESTRATOR_SYSTEM },
+      {
+        role: "user" as const,
+        content: `Agent stream events leading up to intervention:\n${eventsText}`,
+      },
+    ];
+
+    const response = await this._complete(this.model, messages, 0.1);
+
+    this.onLog?.({
+      callType: "action_orchestrator",
+      model: this.model,
+      temperature: 0.1,
+      messages,
+      rawOutput: response,
+      parsedResult: { action: response },
+      durationMs: Date.now() - callStart,
+      formatRetried: false,
+    });
+
+    return this._parseAction(response);
+  }
+
+  private _executeAction(action: MonitorAction, config: StreamMonitorConfig): void {
+    switch (action.type) {
+      case "stdin": {
+        const stdin = config.stdin.current;
+        if (stdin && !stdin.destroyed) {
+          stdin.write(action.payload);
+        }
+        break;
+      }
+      case "cancel":
+        config.onCancel();
+        break;
+      case "escalate":
+        config.onEscalate(action.payload);
+        break;
+    }
+  }
+
+  private _parseAction(response: string): MonitorAction {
+    const match = response.match(/<circuit_action>(.*?)<\/circuit_action>/is);
+    if (!match) {
+      return { type: "escalate", payload: response.trim().slice(0, 200) };
+    }
+
+    const content = match[1]!.trim();
+    if (content.startsWith("stdin:")) {
+      return { type: "stdin", payload: content.slice(6) };
+    }
+    if (content === "cancel") {
+      return { type: "cancel", payload: "" };
+    }
+    if (content.startsWith("escalate:")) {
+      return { type: "escalate", payload: content.slice(9).trim() };
+    }
+
+    return { type: "escalate", payload: content };
+  }
+
+  private async _complete(
+    model: string,
+    messages: { role: "system" | "user" | "assistant"; content: string }[],
+    temperature: number,
+  ): Promise<string> {
+    const chunks: string[] = [];
+    for await (const chunk of this.client.stream(model, messages, temperature)) {
+      chunks.push(chunk.content);
+    }
+    return chunks.join("");
   }
 }
 

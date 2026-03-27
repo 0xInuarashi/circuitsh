@@ -1,10 +1,12 @@
 import { spawn } from "child_process";
+import type { Writable } from "stream";
 import type { BinOutput, SessionAdapter } from "./types.ts";
 import { BinNotFoundError } from "./errors.ts";
 
 export interface RunBinResult {
   output: Promise<BinOutput>;
   cancel: () => void;
+  stdin: Writable | null;
 }
 
 /**
@@ -38,6 +40,7 @@ export function runBin(opts: {
   const startTime = Date.now();
 
   let proc: ReturnType<typeof spawn> | null = null;
+  let procStdin: Writable | null = null;
   let resolved = false;
   let cancelled = false;
   let cancelReject: ((err: unknown) => void) | null = null;
@@ -56,12 +59,14 @@ export function runBin(opts: {
     cancelReject = reject;
 
     try {
-      proc = spawn(cmd, args, {
+      const spawned = spawn(cmd, args, {
         cwd: opts.workingDir,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env },
         detached: true,
       });
+      proc = spawned;
+      procStdin = spawned.stdin;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       reject(new BinNotFoundError(`${opts.binCommand}: ${msg}`));
@@ -128,5 +133,6 @@ export function runBin(opts: {
       setTimeout(() => killTree("SIGKILL"), 2000);
       cancelReject?.(new Error("BIN cancelled"));
     },
+    stdin: procStdin,
   };
 }

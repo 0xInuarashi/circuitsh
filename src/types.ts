@@ -1,3 +1,5 @@
+import type { Writable } from "stream";
+
 // ── AST Types ──
 
 export type ExpansionMode =
@@ -248,6 +250,29 @@ export interface ExpansionResult {
 export interface VerdictSynthesisResult {
   verdict: Verdict;
   reasoning: string;
+}
+
+// ── Stream Monitor Types ──
+
+export type MonitorActionType = "stdin" | "cancel" | "escalate";
+
+export interface MonitorAction {
+  type: MonitorActionType;
+  payload: string;
+}
+
+export interface DetectorResult {
+  needsAction: boolean;
+  reason?: string;
+}
+
+export interface StreamMonitorConfig {
+  stepGoal: string;
+  stdin: { current: Writable | null };
+  onStdout: (chunk: string) => void;
+  onStderr: (chunk: string) => void;
+  onCancel: () => void;
+  onEscalate: (reason: string) => void;
 }
 
 // ── OpenRouter Streaming Types ──

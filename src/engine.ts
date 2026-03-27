@@ -2,6 +2,7 @@ import { execSync, spawn as spawnProcess } from "child_process";
 import { createInterface } from "readline";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { platform, release, cpus, totalmem, freemem } from "os";
+import type { Writable } from "stream";
 import type {
   CircuitAST,
   CircuitConfig,
@@ -613,6 +614,18 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   }
 
   console.log(`  ${c.cyan}Running ${stepRunBin.split(" ")[0]}...${c.reset}`);
+  // stdin ref is populated immediately after runBin, before monitor handler fires
+  const runStdinRef = { current: null as Writable | null };
+  // Temporary handler while we set up stdin
+  let runStdoutHandler: ((chunk: string) => void) | undefined;
+  runStdoutHandler = harness.makeMonitorHandler(runAdapter, streamLevel ?? "verbose", {
+    stepGoal: circuit.name,
+    stdin: runStdinRef,
+    onStdout: (c) => process.stdout.write(c),
+    onStderr: isDebug ? (c) => process.stderr.write(c) : undefined!,
+    onCancel: () => { runBinResult.cancel(); },
+    onEscalate: (reason) => console.error(`  ${c.yellow}[ESCALATE] ${reason}${c.reset}`),
+  });
   const runBinResult = runBin({
     adapter: runAdapter,
     binCommand: stepRunBin,
@@ -620,11 +633,11 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     sessionId: state.runSessionId,
     isFirst: runIsNewSession,
     workingDir: config.dir,
-    onStdout: streamLevel
-      ? makeStreamHandler(runAdapter, streamLevel)
-      : undefined,
+    onStdout: runStdoutHandler,
     onStderr: isDebug ? (c) => process.stderr.write(c) : undefined,
   });
+  runStdinRef.current = runBinResult.stdin;
+  harness.setStdin(runBinResult.stdin);
   state.killCurrentProcess = runBinResult.cancel;
   const runOutput = await runBinResult.output;
   state.killCurrentProcess = undefined; // RUN done, clear kill ref
@@ -744,6 +757,16 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
   }
 
   console.log(`  ${c.cyan}Running EVAL...${c.reset}`);
+  const evalStdinRef = { current: null as Writable | null };
+  let evalStdoutHandler: ((chunk: string) => void) | undefined;
+  evalStdoutHandler = harness.makeMonitorHandler(evalAdapter, streamLevel ?? "verbose", {
+    stepGoal: circuit.name,
+    stdin: evalStdinRef,
+    onStdout: (c) => process.stdout.write(c),
+    onStderr: isDebug ? (c) => process.stderr.write(c) : undefined!,
+    onCancel: () => { evalBinResult.cancel(); },
+    onEscalate: (reason) => console.error(`  ${c.yellow}[ESCALATE] ${reason}${c.reset}`),
+  });
   const evalBinResult = runBin({
     adapter: evalAdapter,
     binCommand: stepEvalBin,
@@ -751,11 +774,11 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     sessionId: state.evalSessionId,
     isFirst: evalIsNewSession,
     workingDir: config.dir,
-    onStdout: streamLevel
-      ? makeStreamHandler(evalAdapter, streamLevel)
-      : undefined,
+    onStdout: evalStdoutHandler,
     onStderr: isDebug ? (c) => process.stderr.write(c) : undefined,
   });
+  evalStdinRef.current = evalBinResult.stdin;
+  harness.setStdin(evalBinResult.stdin);
   state.killCurrentProcess = evalBinResult.cancel;
   const evalOutput = await evalBinResult.output;
   state.killCurrentProcess = undefined; // EVAL done, clear kill ref
