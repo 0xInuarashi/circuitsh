@@ -104,7 +104,6 @@ export function logIteration(
   path: string,
   result: IterationResult,
   expandRunRaw: string,
-  expandEvalRaw: string | null,
   runRawLogRef: string | null,
   evalRawLogRef: string | null,
 ): void {
@@ -127,13 +126,7 @@ export function logIteration(
       durationMs: result.runOutput.durationMs,
       rawLogRef: runRawLogRef,
     },
-    expandEval: expandEvalRaw
-      ? {
-          context: {},
-          expandedPrompt: result.expandedEvalPrompt ?? "",
-          rawEngineerResponse: expandEvalRaw,
-        }
-      : null,
+    expandEval: null,
     eval: result.evalOutput
       ? {
           command: result.evalOutput.command,

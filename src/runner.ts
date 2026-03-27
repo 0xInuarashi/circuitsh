@@ -77,13 +77,13 @@ export function runBin(opts: {
       setTimeout(() => killTree("SIGKILL"), 2000);
     };
 
-    proc.stdout.on("data", (data: Buffer) => {
+    proc.stdout?.on("data", (data: Buffer) => {
       const text = data.toString();
       stdoutChunks.push(text);
       opts.onStdout?.(text);
     });
 
-    proc.stderr.on("data", (data: Buffer) => {
+    proc.stderr?.on("data", (data: Buffer) => {
       const text = data.toString();
       stderrChunks.push(text);
       opts.onStderr?.(text);

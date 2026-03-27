@@ -160,7 +160,7 @@ async function fetchCompletion(
     throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
   }
 
-  const data = await resp.json();
+  const data = await resp.json() as { choices?: { message?: { content?: string } }[] };
   return data.choices?.[0]?.message?.content ?? "";
 }
 

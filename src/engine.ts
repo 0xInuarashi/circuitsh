@@ -34,7 +34,8 @@ import {
   writeCheckpoint,
   loadCheckpoint,
 } from "./storage.ts";
-import type { SessionRecoveryDoc, CircuitCheckpoint } from "./storage.ts";
+import type { SessionRecoveryDoc } from "./types.ts";
+import type { CircuitCheckpoint } from "./storage.ts";
 import { join } from "path";
 import { AuthError, BinNotFoundError, RateLimitError } from "./errors.ts";
 
@@ -64,6 +65,7 @@ export async function executeCircuit(
   cliOptions: CLIOptions,
 ): Promise<boolean> {
   const circuit = ast.circuits[0]!;
+  const isDebug = cliOptions.debug || cliOptions.raw;
 
   // ── Resume from checkpoint ──
   let resumeCheckpoint: CircuitCheckpoint | null = null;
@@ -255,7 +257,7 @@ export async function executeCircuit(
 
       // Safe point: handle human intervention before expanding
       if (state.interventionPending) {
-        await handleIntervention(state, circuit.name, stepIndex, iteration);
+        await handleIntervention(state, circuit.name, state.stepIndex, iteration);
         // After handling, continue to re-expand — don't count as retry
       }
 
@@ -335,7 +337,6 @@ export async function executeCircuit(
           logPath,
           iterResult,
           iterResult.expandedRunPrompt,
-          iterResult.expandedEvalPrompt,
           runRawLogRef,
           evalRawLogRef,
         );
@@ -737,7 +738,7 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
 
   // Safe point: handle human intervention before EVAL
   if (state.interventionPending) {
-    await handleIntervention(state, circuit.name, stepIndex, iteration);
+    await handleIntervention(state, circuit.name, state.stepIndex, iteration);
     // Clear kill ref — RUN subprocess is already done
     state.killCurrentProcess = undefined;
   }
@@ -1000,14 +1001,14 @@ async function expandWithRequestLoop(
 
     // Buffer reasoning and API metadata for debug display
     const reasoningBuffer: string[] = [];
-    let apiMeta: { totalCostUsd: number | null; numTurns: number | null; durationMs: number | null } | null = null;
+    const apiMeta = { v: null as { totalCostUsd: number | null; numTurns: number | null; durationMs: number | null } | null };
 
     const expansion = await harness.expandRun(
       context,
       expandOpts,
       isDebug ? (chunk: string) => process.stdout.write(chunk.replaceAll("\n", `\n  ${c.blue}│${c.reset} `)) : undefined,
       isDebug ? (chunk: string) => reasoningBuffer.push(chunk) : undefined,
-      isDebug ? (meta) => { apiMeta = meta; } : undefined,
+      isDebug ? (meta) => { apiMeta.v = meta; } : undefined,
     );
 
     if (isDebug) {
@@ -1063,11 +1064,11 @@ async function expandWithRequestLoop(
         console.log(`  ${c.yellow}└──${c.reset}`);
       }
 
-      if (apiMeta) {
+      if (apiMeta.v) {
         console.log(`  ${c.green}┌─ API METADATA ──${c.reset}`);
-        if (apiMeta.totalCostUsd !== null) console.log(`  ${c.green}│${c.reset} cost: $${apiMeta.totalCostUsd.toFixed(4)}`);
-        if (apiMeta.numTurns !== null) console.log(`  ${c.green}│${c.reset} turns: ${apiMeta.numTurns}`);
-        if (apiMeta.durationMs !== null) console.log(`  ${c.green}│${c.reset} duration: ${(apiMeta.durationMs / 1000).toFixed(1)}s`);
+        if (apiMeta.v.totalCostUsd !== null) console.log(`  ${c.green}│${c.reset} cost: $${apiMeta.v.totalCostUsd.toFixed(4)}`);
+        if (apiMeta.v.numTurns !== null) console.log(`  ${c.green}│${c.reset} turns: ${apiMeta.v.numTurns}`);
+        if (apiMeta.v.durationMs !== null) console.log(`  ${c.green}│${c.reset} duration: ${(apiMeta.v.durationMs / 1000).toFixed(1)}s`);
         console.log(`  ${c.green}└──${c.reset}`);
       }
     }
