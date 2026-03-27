@@ -307,13 +307,7 @@ Key-value store persisted across iterations within a step.
 
 ## Verdict Protocol
 
-EVAL bins must output exactly one verdict tag:
-
-```
-<verdict>SUCCESS</verdict>
-<verdict>PROGRESS</verdict>
-<verdict>FAILURE</verdict>
-```
+After each EVAL step, a verdict synthesizer (an LLM call) reads the eval summary and run output, then produces a verdict. The eval bin's output is treated as a summary — the synthesizer judges whether the criteria are met.
 
 | Verdict | Meaning | Engine behavior |
 |---|---|---|
@@ -321,10 +315,9 @@ EVAL bins must output exactly one verdict tag:
 | `PROGRESS` | Working toward it, not there yet | Retry with forward momentum |
 | `FAILURE` | Off track or broken | Retry with feedback |
 
-- Case-insensitive matching
-- No tag found = FAILURE (safe default)
-- PROGRESS and FAILURE both trigger retry; PROGRESS signals the eval saw something working
-- On retry: full EVAL output becomes feedback for the next RUN prompt
+- The verdict synthesizer receives: the eval step's goal/prompt, the RUN output, and the EVAL output
+- Its full reasoning becomes the feedback for the next retry
+- The `<verdict>` tag format (`<verdict>SUCCESS</verdict>`, etc.) is still recognized if the eval agent emits it — treated as a strong hint the synthesizer should echo
 
 ## Request Input Protocol
 

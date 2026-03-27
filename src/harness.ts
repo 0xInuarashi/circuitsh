@@ -2,6 +2,8 @@ import type {
   ExpansionContext,
   ExpansionResult,
   IterationResult,
+  Verdict,
+  VerdictSynthesisResult,
 } from "./types.ts";
 import { OpenRouterClient } from "./client.ts";
 import {
@@ -55,13 +57,23 @@ Please try again with the correct format.`;
 
 const TEMP_RUN_EXPANSION = 0.35;
 const TEMP_FORMAT_RETRY = 0.2;
+const TEMP_VERDICT = 0.1;
+
+const VERDICT_SYNTHESIS_SYSTEM = `\
+You are a quality assessor. Given the step goal, what the agent ran, \
+and the evaluation summary, emit exactly one verdict.
+
+<verdict>SUCCESS</verdict>  — the criteria are met, advance to the next step
+<verdict>PROGRESS</verdict>  — working toward the goal, retry with forward momentum
+<verdict>FAILURE</verdict>   — off track or broken, retry with feedback
+`;
 
 /**
  * The Harness expands terse user prompts into rich, context-aware prompts
  * using the Prompt Engineer Model.
  */
 export type EngineerCallLogger = (log: {
-  callType: "run_expand";
+  callType: "run_expand" | "verdict_synthesis";
   model: string;
   temperature: number;
   messages: Array<{ role: string; content: string }>;
@@ -110,6 +122,49 @@ export class Harness {
       onResult,
       opts?.modelOverride,
     );
+  }
+
+  /**
+   * Synthesize a verdict from the eval summary and run output.
+   * A lightweight LLM call that reads what the agent did and what the eval reported,
+   * then produces a SUCCESS/PROGRESS/FAILURE verdict with reasoning.
+   */
+  async synthesizeVerdict(
+    stepGoal: string,
+    runOutput: string,
+    evalSummary: string,
+  ): Promise<VerdictSynthesisResult> {
+    const callStart = Date.now();
+    const trunc = (s: string, n: number) =>
+      s.length <= n ? s : s.slice(0, n);
+
+    const userMessage =
+      `<step_goal>${stepGoal}</step_goal>\n\n` +
+      `<run_output>\n${trunc(runOutput, 4000)}\n</run_output>\n\n` +
+      `<eval_summary>\n${evalSummary}\n</eval_summary>`;
+
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: VERDICT_SYNTHESIS_SYSTEM },
+      { role: "user", content: userMessage },
+    ];
+
+    const response = await this.streamComplete(this.model, messages, TEMP_VERDICT);
+    const verdict = parseVerdictTag(response);
+
+    const result: VerdictSynthesisResult = { verdict, reasoning: response };
+
+    this.onLog?.({
+      callType: "verdict_synthesis",
+      model: this.model,
+      temperature: TEMP_VERDICT,
+      messages,
+      rawOutput: response,
+      parsedResult: { verdict, reasoning: response },
+      durationMs: Date.now() - callStart,
+      formatRetried: false,
+    });
+
+    return result;
   }
 
   private async streamComplete(
@@ -313,4 +368,18 @@ function compressExecutionHistory(history: IterationResult[]): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Extract verdict from a verdict synthesis LLM response.
+ * Falls back to FAILURE if no tag found.
+ */
+function parseVerdictTag(response: string): Verdict {
+  const match = response.match(/<verdict>(.*?)<\/verdict>/is);
+  if (!match) return "FAILURE";
+  const text = match[1]!.trim().toUpperCase();
+  if (text === "SUCCESS" || text === "PROGRESS" || text === "FAILURE") {
+    return text;
+  }
+  return "FAILURE";
 }

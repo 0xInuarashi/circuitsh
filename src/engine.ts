@@ -11,12 +11,13 @@ import type {
   ExpansionResult,
   IterationResult,
   StepState,
+  Verdict,
 } from "./types.ts";
 import { OpenRouterClient } from "./client.ts";
 import { Harness, RUN_EXPANSION_SYSTEM } from "./harness.ts";
 import { detectAdapter } from "./session.ts";
 import { runBin } from "./runner.ts";
-import { parseVerdict, parseScratchpadUpdates, parseRequestInput, type Verdict } from "./verdict.ts";
+import { parseScratchpadUpdates, parseRequestInput } from "./verdict.ts";
 import {
   logCircuitStart,
   logCircuitEnd,
@@ -791,8 +792,14 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     rawLog("EVAL STDERR", evalOutput.stderr);
   }
 
-  // Parse verdict — search raw stdout first (has all streamed deltas)
-  const { verdict, feedback } = parseVerdict(evalOutput.rawStdout, evalOutput.stdout);
+  // Synthesize verdict — LLM reads eval summary and run output, emits verdict
+  const verdictResult = await harness.synthesizeVerdict(
+    step.eval.prompt,
+    runOutput.stdout,
+    evalOutput.stdout,
+  );
+  const verdict: Verdict = verdictResult.verdict;
+  const feedback = verdictResult.reasoning;
 
   if (isDebug) {
     const verdictColor =

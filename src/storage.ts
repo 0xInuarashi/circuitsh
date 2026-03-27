@@ -395,7 +395,7 @@ export function writeManifest(runDir: string, manifest: {
 // ── Prompt Engineer Logs ──
 
 export interface EngineerCallLog {
-  callType: "run_expand";
+  callType: "run_expand" | "verdict_synthesis";
   stepIndex: number;
   iteration: number;
   timestamp: string;

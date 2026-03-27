@@ -197,6 +197,10 @@ export interface CircuitRunState {
   endTime: string | null;
 }
 
+// ── Verdict Types ──
+
+export type Verdict = "SUCCESS" | "PROGRESS" | "FAILURE";
+
 // ── Prompt Engineer Types ──
 
 export interface ExpansionContext {
@@ -239,6 +243,11 @@ export interface ExpansionResult {
   expandedPrompt: string;
   engineerScratchpadUpdates: Record<string, string>;
   rawResponse: string;
+}
+
+export interface VerdictSynthesisResult {
+  verdict: Verdict;
+  reasoning: string;
 }
 
 // ── OpenRouter Streaming Types ──
