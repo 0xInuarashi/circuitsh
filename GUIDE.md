@@ -18,7 +18,7 @@ Circuit is the wiring, not the components. The AI agents (Claude, aider, codex, 
 
 ## File Structure
 
-A `.circuit` file has two sections: **defines** (configuration) at the top, followed by one or more **CIRCUIT blocks**.
+A `.circuit` file has three parts: **defines** (configuration), optional **CIRCUIT_CONTEXT** (constraints), and one or more **CIRCUIT blocks**.
 
 ```circuit
 # Configuration
@@ -27,10 +27,13 @@ API_KEY ${OPENROUTER_API_KEY}
 RUN_BIN claude --dangerously-skip-permissions
 DIR ~/my-project
 
+# Constraints the engineer enforces on every expansion
+CIRCUIT_CONTEXT "All network calls must use the proxy module."
+
 # The circuit
 CIRCUIT Build a web scraper:
-  RUN Build a web scraper in Python that handles rate limiting and retries
-  EVAL Test the scraper against 3 different sites and verify it handles errors gracefully
+  RUN "Build a web scraper in Python that handles rate limiting and retries"
+  EVAL "Test against 3 different sites and verify it handles errors gracefully"
     RETRY 5
 ```
 
@@ -50,7 +53,7 @@ Top-level key-value pairs that configure the circuit runtime.
 | `DIR` | No | `.` | Working directory (created if it doesn't exist) |
 | `LOG_DIR` | No | `.circuit-runs/` | Where JSONL run logs are saved |
 | `CHECKPOINT` | No | `off` | Git snapshot before each iteration (`on`/`off`) |
-| `TIMEOUT` | No | `0` | Per-step timeout in seconds (0 = no limit) |
+| `CIRCUIT_CONTEXT` | No | — | Static constraints injected into every prompt engineer expansion (see below) |
 
 Config priority: **CLI flags > .circuit defines > environment variables > defaults**
 
@@ -71,6 +74,17 @@ ALIAS claude "claude --dangerously-skip-permissions"
 RUN_BIN claude          # resolves to "claude --dangerously-skip-permissions"
 EVAL_BIN claude         # same
 ```
+
+## CIRCUIT_CONTEXT
+
+Static constraints injected into every prompt engineer expansion — the engineer synthesizes them as hard guardrails in its system prompt. Unlike prompts which are directional guidance, CIRCUIT_CONTEXT defines the space of acceptable outcomes.
+
+```circuit
+CIRCUIT_CONTEXT "No OpenAI API keys anywhere in this project."
+CIRCUIT_CONTEXT "All HTTP calls must go through the proxy layer."
+```
+
+Multiple lines are joined with a double newline. The engineer treats these as non-negotiable — if the agent drifts outside the acceptable space, the engineer re-anchors it.
 
 ## Step Directives
 
@@ -95,11 +109,12 @@ Executes a task. The prompt is a terse, human-written description — the runtim
 Evaluates the preceding RUN's work. Must follow a RUN. The EVAL agent must output a verdict:
 
 ```
-<verdict>SUCCESS</verdict>   — step passes, move to next step
-<verdict>FAILURE</verdict>   — step fails, retry with feedback
+<verdict>SUCCESS</verdict>   — criteria met, move to next step
+<verdict>PROGRESS</verdict>   — working toward it, not there yet, retry with forward momentum
+<verdict>FAILURE</verdict>   — off track or broken, retry with feedback
 ```
 
-If no `<verdict>` tag is found, it defaults to FAILURE (safe default). The entire EVAL output becomes the feedback for the next RUN retry.
+PROGRESS is a third state — it signals the evaluator saw something working. Both PROGRESS and FAILURE trigger retry, but PROGRESS tells the engineer the approach is sound. If no `<verdict>` tag is found, it defaults to FAILURE. The entire EVAL output becomes the feedback for the next RUN retry.
 
 ### RETRY
 
@@ -276,9 +291,11 @@ Each step has one of three expansion modes:
 
 | Mode | Syntax | Behavior |
 |---|---|---|
-| **auto** | `RUN` / `EVAL` | Default harness expansion via `PROMPT_ENGINEER_MODEL` |
-| **raw** | `RAW_RUN` / `RAW_EVAL` | No expansion — prompt sent verbatim |
-| **custom** | `EXPAND ... INTO:` | Custom model and optional FOCUS |
+| **auto** | `RUN` | Expanded by `PROMPT_ENGINEER_MODEL` |
+| **raw** | `RAW_RUN` | No expansion — prompt sent verbatim |
+| **custom** | `EXPAND ... INTO: RUN` | Custom model and optional FOCUS |
+| — | `EVAL` / `RAW_EVAL` | Never expanded — prompt goes verbatim to bin |
+| — | `EXPAND ... INTO: EVAL` | FOR/FOCUS/AS are accepted but ignored — EVAL is always verbatim |
 
 ### FOCUS
 
@@ -342,26 +359,29 @@ CIRCUIT two-phase:
 
 ## The Harness (Prompt Expansion)
 
-This is what makes Circuit work. You write:
+This is what makes Circuit work. The harness acts as a mentor — it observes what happened, sets direction, and trusts the agent to figure out the how. It does not write specifications or task lists.
+
+You write:
 
 ```circuit
   RUN Build a compression algorithm in rust
 ```
 
-But what actually gets sent to `RUN_BIN` is a rich prompt expanded by the prompt engineer model, including:
+But what actually gets sent to `RUN_BIN` is a prompt expanded by the prompt engineer model, including:
 
 - **Goal** — the CIRCUIT name, re-injected every iteration to prevent drift
 - **Your prompt** — the task description you wrote
-- **Iteration state** — "attempt 3 of 10, 7 retries remaining"
+- **CIRCUIT_CONTEXT** — hard constraints the engineer must enforce
+- **Your observations** — what the engineer has noticed across iterations
+- **Working directory changes** — what changed since the last attempt
 - **EVAL feedback** — what the evaluator said was wrong (on retries)
-- **Scratchpad** — key-value store the agent can write to across iterations
-- **Working directory state** — what files exist, what changed since last iteration
-- **Environment** — OS, shell, working directory, date
+- **Scratchpad** — key-value store the agent and engineer can write to across iterations
+- **Environment** — OS, shell, working directory, date, machine specs
 - **Execution history** — compressed log of all previous iterations
 - **Step context** — summary of previous steps (for multi-step circuits)
 - **ALLOW_REQUEST conditions** — what the engineer is permitted to request user input for
 
-The prompt engineer model weaves all of this into a single coherent prompt. It's not a rigid template — it adapts based on context, emphasizing different things on iteration 1 vs iteration 8.
+The engineer model weaves all of this into a coherent direction. A good mentor adds little on iteration 1 when the prompt is already clear, and offers a fresh perspective when retries show something isn't working.
 
 ## Scratchpad
 
@@ -483,7 +503,6 @@ The prompt engineer has read access to the full execution history, enabling it t
 | `CIRCUIT_EVAL_BIN` | `EVAL_BIN` |
 | `CIRCUIT_DIR` | `DIR` |
 | `CIRCUIT_LOG_DIR` | `LOG_DIR` |
-| `CIRCUIT_TIMEOUT` | `TIMEOUT` |
 
 Environment variables are overridden by `.circuit` file defines, which are overridden by CLI flags.
 
@@ -492,12 +511,33 @@ Environment variables are overridden by `.circuit` file defines, which are overr
 | Tier | What happens |
 |---|---|
 | **Fatal** (auth failure, parse error, BIN not found) | Circuit aborts immediately |
-| **Transient** (rate limit, BIN timeout) | Exponential backoff, retry up to 3x |
-| **Recoverable** (provider error, missing verdict tag) | Graceful degradation, continue |
+| **Transient** (rate limit, BIN timeout) | Backoff and retry up to 3x |
+| **Recoverable** (provider error, missing verdict tag) | Graceful degradation, retry |
+| **Retry** (PROGRESS or FAILURE verdict) | Feed eval output to engineer, expand RUN again |
 
 ## Session Persistence
 
 RUN and EVAL sessions persist across retries within a step. The agent accumulates context — it remembers what it already tried. For the Claude CLI, this uses `--session-id`. For other BINs, the full context is included in each expanded prompt.
+
+## Crash Recovery
+
+Circuits checkpoint state after each completed iteration to `LOG_DIR/<runId>/checkpoint.json`. If the process is killed (crash, OOM, machine restart), `--resume <runId>` restores everything:
+
+- All scratchpad values
+- Claude session IDs (so the agent picks up its conversation)
+- Step/iteration position (skips completed steps, resumes mid-step)
+
+The checkpoint reflects the last completed iteration. Any in-progress work re-executes with the session auto-resumed.
+
+## Human Intervention (Ctrl+C)
+
+At any point during execution, press Ctrl+C to queue a human intervention. The circuit continues — at the next safe point (before RUN expansion or before EVAL expansion), it prompts for your observation.
+
+- **1× Ctrl+C**: kills the subprocess, queues the intervention
+- **2× Ctrl+C**: same — queues once
+- **3× Ctrl+C** (within 2s): hard exit
+
+Your observation is injected into the engineer scratchpad as `human_intervention_<timestamp>`. The engineer sees it in the next expansion under **YOUR OBSERVATIONS** — it synthesizes your input as guidance, not a directive. Sessions may be corrupted from the kill; the circuit resumes or retries fresh.
 
 ## Example: Sorting Algorithm
 
@@ -510,15 +550,14 @@ DIR ~/circuitsort
 CHECKPOINT on
 
 CIRCUIT Build a sorting algorithm that beats std lib sort:
-  RUN Create a novel sorting algorithm in Rust that outperforms \
-    the standard library sort on real-world data distributions. \
-    Build a comprehensive benchmark suite testing arrays of sizes \
-    100, 10000, and 1000000 across multiple distributions. \
-    The algorithm must be faster on at least 80% of cases.
-  EVAL Run the benchmarks and verify the custom sort beats std sort \
-    on 80%+ of cases. Verify correctness on edge cases.
+  RUN "Build a novel sorting algorithm in Rust that outperforms the \
+    standard library sort on real-world data distributions."
+  EVAL "Run the benchmarks. Verify the custom sort beats std sort \
+    on 80%+ of cases. Check edge cases."
     RETRY 10
 ```
+
+Keep RUN prompts short and directional. The engineer and the agent figure out the specifics. EVAL criteria should be specific enough to be verifiable.
 
 ## Example: Full-Featured Circuit
 
@@ -533,37 +572,36 @@ RUN_BIN claude
 EVAL_BIN claude
 DIR ~/my-project
 CHECKPOINT on
-TIMEOUT 300
 
 CIRCUIT Deploy a Cloudflare worker:
   # Step 1: scaffold (fire-and-forget)
-  RUN Initialize the project with wrangler
+  RUN "Initialize the project with wrangler"
 
-  # Step 2: build with a different tool
+  # Step 2: build the API proxy logic
   RUN "implement the API proxy logic" WITH aider
   EVAL "does it type-check and pass unit tests?"
     RETRY 5
 
-  # Step 3: integration test with custom expansion
+  # Step 3: integration tests with custom expansion model
   EXPAND AS "deepseek/deepseek-r1" \
     FOR "write integration tests for the proxy" \
-    FOCUS "test edge cases: timeouts, malformed headers, large payloads" \
+    FOCUS "edge cases: timeouts, malformed headers, large payloads" \
     INTO:
     RUN WITH claude
   EVAL "all integration tests pass"
     RETRY 3
 
   # Step 4: deploy — may need credentials from user
-  RUN Deploy the worker to Cloudflare
+  RUN "deploy the worker to Cloudflare"
     ALLOW_REQUEST "an API token is required"
     ALLOW_REQUEST "the account ID is needed"
     NOTIFY ./notify.sh
     REQUEST_TIMEOUT 600
-  EVAL Verify the worker is live and responding
+  EVAL "verify the worker is live and responding"
     ALLOW_REQUEST "DNS verification requires manual input"
     RETRY 5
 
-  # Step 5: benchmark with a script, no expansion needed
+  # Step 5: benchmark — no expansion needed for script calls
   RAW_RUN "wrk -t12 -c400 -d30s https://my-worker.dev" WITH bench
   RAW_EVAL "./check-latency.sh --p99 50ms" WITH bench
     RETRY 2

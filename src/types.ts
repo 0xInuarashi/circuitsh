@@ -96,7 +96,6 @@ export interface CircuitConfig {
   dir: string;
   logDir: string;
   checkpoint: boolean;
-  timeout: number;
   aliases: Record<string, string>;
 }
 
@@ -107,7 +106,6 @@ export const CONFIG_DEFAULTS: Partial<CircuitConfig> = {
   dir: ".",
   logDir: ".circuit-runs",
   checkpoint: false,
-  timeout: 0,
 };
 
 // Maps .circuit DEFINE keys to CircuitConfig fields
@@ -121,7 +119,6 @@ export const DEFINE_KEY_MAP: Record<string, keyof CircuitConfig> = {
   DIR: "dir",
   LOG_DIR: "logDir",
   CHECKPOINT: "checkpoint",
-  TIMEOUT: "timeout",
 };
 
 // Maps env var names to CircuitConfig fields
@@ -137,7 +134,6 @@ export const ENV_VAR_MAP: Record<string, keyof CircuitConfig> = {
   CIRCUIT_DIR: "dir",
   CIRCUIT_LOG_DIR: "logDir",
   CIRCUIT_CHECKPOINT: "checkpoint",
-  CIRCUIT_TIMEOUT: "timeout",
 };
 
 // ── Execution State Types ──

@@ -13,7 +13,7 @@ import type {
   StepState,
 } from "./types.ts";
 import { OpenRouterClient } from "./client.ts";
-import { Harness, diagnoseTimeout, RUN_EXPANSION_SYSTEM } from "./harness.ts";
+import { Harness, RUN_EXPANSION_SYSTEM } from "./harness.ts";
 import { detectAdapter } from "./session.ts";
 import { runBin } from "./runner.ts";
 import { parseVerdict, parseScratchpadUpdates, parseRequestInput, type Verdict } from "./verdict.ts";
@@ -35,7 +35,7 @@ import {
 } from "./storage.ts";
 import type { SessionRecoveryDoc, CircuitCheckpoint } from "./storage.ts";
 import { join } from "path";
-import { AuthError, BinNotFoundError, BinTimeoutError, RateLimitError } from "./errors.ts";
+import { AuthError, BinNotFoundError, RateLimitError } from "./errors.ts";
 
 // ── ANSI Colors ──
 const c = {
@@ -405,85 +405,6 @@ export async function executeCircuit(
           iteration--; // don't count this as an attempt
           continue;
         }
-        if (err instanceof BinTimeoutError) {
-          console.log(`  ${c.yellow}BIN timed out after ${(err.timeoutMs / 1000).toFixed(0)}s${c.reset}`);
-
-          // Write partial raw logs from the timed-out process
-          if (err.partialRawStdout || err.partialStderr) {
-            writeRawStreamLog(runDir, {
-              role: "run",
-              stepIndex: state.stepIndex,
-              iteration,
-              stdout: err.partialRawStdout,
-              stderr: err.partialStderr,
-            });
-            if (err.partialRawStdout) {
-              writeSessionRecoveryDoc(runDir, {
-                circuitName: circuit.name,
-                role: "run",
-                stepIndex: state.stepIndex,
-                iteration,
-                sessionId: state.runSessionId,
-                rawStdout: err.partialRawStdout,
-              });
-            }
-          }
-
-          console.log(`  ${c.dim}Consulting prompt engineer...${c.reset}`);
-
-          const diagnosis = await diagnoseTimeout(client, config.promptEngineerModel, {
-            binCommand: stepRunBin,
-            timeoutMs: err.timeoutMs,
-            partialStdout: err.partialStdout,
-            partialStderr: err.partialStderr,
-            role: "run",
-            iteration,
-            maxRetries,
-            goal: circuit.name,
-            userPrompt: step.run.prompt,
-          }, (log) => {
-            writeEngineerCallLog(runDir, {
-              callType: "timeout_diagnosis",
-              stepIndex: state.stepIndex,
-              iteration,
-              timestamp: new Date().toISOString(),
-              durationMs: log.durationMs,
-              model: log.model,
-              temperature: log.temperature,
-              messages: log.messages,
-              rawOutput: log.rawOutput,
-              parsedResult: log.parsedResult,
-              formatRetried: false,
-            });
-          });
-
-          console.log(`  ${c.cyan}Engineer decision: ${c.bold}${diagnosis.action}${c.reset}`);
-          console.log(`  ${c.dim}${diagnosis.reason}${c.reset}`);
-
-          if (diagnosis.action === "abort") {
-            console.log(`  ${c.red}Aborting step per engineer recommendation${c.reset}`);
-            break;
-          }
-
-          if (diagnosis.action === "increase_timeout" && diagnosis.suggestedTimeoutMs) {
-            const newTimeout = Math.min(diagnosis.suggestedTimeoutMs, config.timeout * 1000 * 10 || 3600000);
-            config.timeout = newTimeout / 1000;
-            console.log(`  ${c.yellow}Timeout increased to ${config.timeout}s${c.reset}`);
-          }
-
-          if (diagnosis.action === "resume") {
-            // Don't count as a retry — resume continues the session
-            console.log(`  ${c.cyan}Resuming session...${c.reset}`);
-            iteration--;
-          }
-          // BIN may have created sessions before being killed — mark as created
-          // so next retry uses --resume to preserve context
-          state.runSessionCreated = true;
-          state.evalSessionCreated = true;
-
-          // "retry" falls through to the next iteration naturally
-          continue;
-        }
         // Unknown error
         console.error(`  ${c.red}Error: ${err instanceof Error ? err.message : err}${c.reset}`);
         if (cliOptions.debug) {
@@ -697,7 +618,6 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     sessionId: state.runSessionId,
     isFirst: runIsNewSession,
     workingDir: config.dir,
-    timeoutMs: config.timeout * 1000,
     onStdout: streamLevel
       ? makeStreamHandler(runAdapter, streamLevel)
       : undefined,
@@ -829,7 +749,6 @@ async function runIteration(opts: RunIterationOpts): Promise<IterationResult> {
     sessionId: state.evalSessionId,
     isFirst: evalIsNewSession,
     workingDir: config.dir,
-    timeoutMs: config.timeout * 1000,
     onStdout: streamLevel
       ? makeStreamHandler(evalAdapter, streamLevel)
       : undefined,

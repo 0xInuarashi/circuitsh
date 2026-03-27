@@ -89,11 +89,6 @@ function coerce(key: string, value: string): unknown {
   if (key === "checkpoint") {
     return value === "on" || value === "true" || value === "1";
   }
-  if (key === "timeout") {
-    const num = parseInt(value, 10);
-    if (isNaN(num)) return 0;
-    return num;
-  }
   return value;
 }
 

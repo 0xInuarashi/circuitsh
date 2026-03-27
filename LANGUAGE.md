@@ -4,17 +4,17 @@ Formal specification for the `.circuit` file format.
 
 ## Grammar
 
-A `.circuit` file consists of an optional **header** (defines and aliases) followed by one or more **CIRCUIT blocks**.
+A `.circuit` file consists of an optional **header** (defines, aliases, and context constraints) followed by one or more **CIRCUIT blocks**.
 
 ```
 file        = header* circuit+
-header      = define | alias
+header      = define | alias | circuit_context
 define      = KEYWORD value
 alias       = "ALIAS" name command
 circuit     = "CIRCUIT" name ":" step+
 step        = run_part [eval_part]
-run_part    = (run | raw_run | expand_into_run) run_mods*
-eval_part   = (eval | raw_eval | expand_into_eval) eval_mods* ["RETRY" N]
+run_part    = (RUN | RAW_RUN | expand_into_run) run_mods*
+eval_part   = (EVAL | RAW_EVAL | expand_into_eval) eval_mods* ["RETRY" N]
 run_mods    = "ALLOW_REQUEST" condition
             | "NOTIFY" command
             | "REQUEST_TIMEOUT" seconds
@@ -27,7 +27,7 @@ eval_mods   = "ALLOW_REQUEST" condition
 
 | Level | Contains |
 |---|---|
-| 0 | Defines, aliases, `CIRCUIT` declarations |
+| 0 | Defines, aliases, `CIRCUIT`, `CIRCUIT_CONTEXT` declarations |
 | 1 | `RUN`, `RAW_RUN`, `EVAL`, `RAW_EVAL`, `EXPAND` |
 | 2 | `RETRY`, `ALLOW_REQUEST`, `NOTIFY`, `REQUEST_TIMEOUT`, `INTO:` block targets |
 
@@ -47,7 +47,6 @@ EVAL_BIN <value>
 DIR <value>
 LOG_DIR <value>
 CHECKPOINT <on|off>
-TIMEOUT <seconds>
 ```
 
 All defines are key-value pairs. Values support `${VAR}` interpolation from environment variables. Values may be quoted (`"value"`) or unquoted.
@@ -63,7 +62,6 @@ All defines are key-value pairs. Values support `${VAR}` interpolation from envi
 | `DIR` | No | `.` | Working directory |
 | `LOG_DIR` | No | `.circuit-runs` | Log output directory |
 | `CHECKPOINT` | No | `off` | Git snapshot per iteration |
-| `TIMEOUT` | No | `0` | Per-step timeout (0 = none) |
 
 Config resolution: **CLI flags > .circuit defines > environment variables > defaults**
 
@@ -80,6 +78,20 @@ ALIAS claude "claude --dangerously-skip-permissions"
 ALIAS bench "./bench.sh"
 RUN_BIN claude           # resolves to "claude --dangerously-skip-permissions"
 ```
+
+### Level 0 — CIRCUIT_CONTEXT
+
+```
+CIRCUIT_CONTEXT <text>
+```
+
+Static constraints injected into every prompt engineer expansion. The engineer sees these as hard requirements — it synthesizes them as non-negotiable guardrails in its system prompt, not as suggestions. Unlike RUN prompts which are directional guidance, CIRCUIT_CONTEXT is the space of acceptable outcomes.
+
+```
+CIRCUIT_CONTEXT "No OpenAI API keys must exist anywhere in this project."
+```
+
+Multiple `CIRCUIT_CONTEXT` lines are joined with a double newline.
 
 ### Level 0 — CIRCUIT
 
@@ -109,6 +121,7 @@ Evaluates the preceding RUN's output. Must follow a RUN. The bin must output a v
 
 ```
 <verdict>SUCCESS</verdict>
+<verdict>PROGRESS</verdict>
 <verdict>FAILURE</verdict>
 ```
 
@@ -403,7 +416,6 @@ The subprocess is killed via SIGTERM (+ SIGKILL grace period). Sessions may be c
 | `CIRCUIT_EVAL_BIN` | `EVAL_BIN` |
 | `CIRCUIT_DIR` | `DIR` |
 | `CIRCUIT_LOG_DIR` | `LOG_DIR` |
-| `CIRCUIT_TIMEOUT` | `TIMEOUT` |
 
 ## CLI
 

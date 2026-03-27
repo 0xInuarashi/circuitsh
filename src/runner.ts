@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import type { BinOutput, SessionAdapter } from "./types.ts";
-import { BinNotFoundError, BinTimeoutError } from "./errors.ts";
+import { BinNotFoundError } from "./errors.ts";
 
 export interface RunBinResult {
   output: Promise<BinOutput>;
@@ -19,7 +19,6 @@ export function runBin(opts: {
   sessionId: string;
   isFirst: boolean;
   workingDir: string;
-  timeoutMs: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
 }): RunBinResult {
@@ -41,7 +40,7 @@ export function runBin(opts: {
   let proc: ReturnType<typeof spawn> | null = null;
   let resolved = false;
   let cancelled = false;
-  let rejectFn: ((err: unknown) => void) | null = null;
+  let cancelReject: ((err: unknown) => void) | null = null;
 
   const killTree = (signal: NodeJS.Signals) => {
     if (!proc) return;
@@ -54,7 +53,7 @@ export function runBin(opts: {
   };
 
   const output = new Promise<BinOutput>((resolve, reject) => {
-    rejectFn = reject;
+    cancelReject = reject;
 
     try {
       proc = spawn(cmd, args, {
@@ -71,23 +70,12 @@ export function runBin(opts: {
 
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
-    let timedOut = false;
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
     const cancel = () => {
       cancelled = true;
-      timedOut = true; // reuse flag to trigger rejection
       killTree("SIGTERM");
       setTimeout(() => killTree("SIGKILL"), 2000);
     };
-
-    if (opts.timeoutMs > 0) {
-      timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        killTree("SIGTERM");
-        setTimeout(() => killTree("SIGKILL"), 5000);
-      }, opts.timeoutMs);
-    }
 
     proc.stdout.on("data", (data: Buffer) => {
       const text = data.toString();
@@ -102,31 +90,23 @@ export function runBin(opts: {
     });
 
     proc.on("error", (err) => {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
       if (resolved || cancelled) return;
       resolved = true;
       reject(new BinNotFoundError(`${opts.binCommand}: ${err.message}`));
     });
 
     proc.on("close", (exitCode) => {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      if (resolved || cancelled) return;
+      if (resolved) return;
       resolved = true;
+
+      if (cancelled) {
+        reject(new Error(`BIN cancelled: ${opts.binCommand}`));
+        return;
+      }
 
       const durationMs = Date.now() - startTime;
       const rawStdout = stdoutChunks.join("");
       const stderr = stderrChunks.join("");
-
-      if (timedOut) {
-        reject(new BinTimeoutError(
-          opts.binCommand,
-          opts.timeoutMs,
-          opts.adapter.parseOutput(rawStdout, stderr),
-          rawStdout,
-          stderr,
-        ));
-        return;
-      }
 
       resolve({
         stdout: opts.adapter.parseOutput(rawStdout, stderr),
@@ -146,6 +126,7 @@ export function runBin(opts: {
       cancelled = true;
       killTree("SIGTERM");
       setTimeout(() => killTree("SIGKILL"), 2000);
+      cancelReject?.(new Error("BIN cancelled"));
     },
   };
 }
