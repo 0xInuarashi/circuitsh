@@ -1,1 +1,35 @@
-example.circuit inference.circuit openai-openrouter.circuit parameter-golf.circuit run.circuit search.circuit sort.circuit test.circuit websearch.circuit workspace.circuit
+# Circuit run logs
+.circuit-runs/
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.js.map
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Temp
+*.tmp
+*.temp
+.cache/
